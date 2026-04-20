@@ -29,7 +29,9 @@ class _FakeClient:
 class StructuredExtractionTests(unittest.TestCase):
     def setUp(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        self.schema_fields = load_schema_file(root / "fixtures" / "schema.typed.sample.json")
+        self.schema_fields = load_schema_file(
+            root / "fixtures" / "schemas" / "schema.typed.sample.json"
+        )
         self.entry = {
             "id": "entry-1",
             "raw_text": (

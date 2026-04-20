@@ -2,10 +2,16 @@
 
 This folder holds small sample inputs used for smoke-testing the pipeline.
 
-- `sample.txt` is committed.
-- `sample.pdf` is generated locally (binary) using the script below.
-- `schema.sample.json` is a basic Sprint 2 extraction schema.
-- `schema.typed.sample.json` stresses number/enum/boolean coercion.
+## Layout
+
+- `core/`
+   - `sample.txt` (committed baseline text fixture)
+   - `sample.pdf` (generated baseline PDF fixture)
+- `schemas/`
+   - `schema.sample.json` (basic Sprint 2 extraction schema)
+   - `schema.typed.sample.json` (number/enum/boolean stress schema)
+- `generated/`
+   - `diary/` (bulk generated PDFs for realism/coverage)
 
 ## Generate sample PDF
 
@@ -17,13 +23,17 @@ This folder holds small sample inputs used for smoke-testing the pipeline.
 
    `python scripts/make_sample_pdf.py`
 
-This creates `fixtures/sample.pdf`.
+This creates `fixtures/core/sample.pdf`.
 
 ## Sprint 2 typed-schema smoke test
 
 Use this command to run extraction + segmentation + LLM structuring against the typed schema:
 
-`python -m depipeline fixtures/sample.txt fixtures/sample.pdf --schema-file fixtures/schema.typed.sample.json --ollama-model llama3.2:3b --sample 2`
+`python -m depipeline fixtures/core/sample.txt fixtures/core/sample.pdf --schema-file fixtures/schemas/schema.typed.sample.json --ollama-model llama3.2:3b --sample 2`
+
+To run against the generated diary batch in bash:
+
+`python -m depipeline fixtures/generated/diary/*.pdf --schema-file fixtures/schemas/schema.typed.sample.json --ollama-model llama3.2:3b --sample 3`
 
 ## Sprint 2 regression test (fast, no Ollama required)
 

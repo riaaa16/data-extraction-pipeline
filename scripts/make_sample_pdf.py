@@ -8,9 +8,11 @@ import fitz  # PyMuPDF
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     fixtures = root / "fixtures"
+    core_fixtures = fixtures / "core"
     fixtures.mkdir(parents=True, exist_ok=True)
+    core_fixtures.mkdir(parents=True, exist_ok=True)
 
-    out_path = fixtures / "sample.pdf"
+    out_path = core_fixtures / "sample.pdf"
 
     doc = fitz.open()
     page = doc.new_page()
