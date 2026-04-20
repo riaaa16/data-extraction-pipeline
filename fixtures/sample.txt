@@ -1,0 +1,13 @@
+Interview Notes - Example
+
+Participant: Alex
+Date: 2026-04-01
+
+Alex said onboarding felt confusing at first because the instructions were spread across multiple pages.
+They expected a single checklist.
+
+They liked the search feature once they found it, but they didn’t notice the filter controls.
+
+Quote: "I kept thinking I missed a step."
+
+Suggested improvement: show progress (Step 1 of 3) and a clear Continue button.
