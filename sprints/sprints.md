@@ -2,8 +2,8 @@
 
 Each sprint is documented as its own file (Goal / Scope / Non-goals / Deliverables / Implementation Tasks / Acceptance Criteria).
 
-- [Sprint 01: Setup & Parsing (Active)](active/sprint_01_setup_parsing.md)
-- [Sprint 02: LLM Extraction](sprint_02_llm_extraction.md)
+- [Sprint 01: Setup & Parsing (Complete)](complete/sprint_01_setup_parsing.md)
+- [Sprint 02: LLM Extraction (Active)](active/sprint_02_llm_extraction.md)
 - [Sprint 03: Validation Layer](sprint_03_validation_layer.md)
 - [Sprint 04: UI Core (Streamlit)](sprint_04_ui_core.md)
 - [Sprint 05: Insights](sprint_05_insights.md)

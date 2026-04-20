@@ -1,0 +1,41 @@
+{
+  "fields": [
+    {
+      "name": "participant_name",
+      "type": "string",
+      "description": "Primary participant name if present"
+    },
+    {
+      "name": "entry_date",
+      "type": "string",
+      "description": "Date value as written in the text"
+    },
+    {
+      "name": "flow_step_current",
+      "type": "number",
+      "description": "Current step number if a pattern like 'Step X of Y' appears"
+    },
+    {
+      "name": "flow_step_total",
+      "type": "number",
+      "description": "Total step count if a pattern like 'Step X of Y' appears"
+    },
+    {
+      "name": "sentiment",
+      "type": "enum",
+      "enum": ["positive", "neutral", "negative"],
+      "description": "Overall sentiment in the entry"
+    },
+    {
+      "name": "primary_issue",
+      "type": "enum",
+      "enum": ["onboarding", "navigation", "filters", "export", "search", "other"],
+      "description": "Most salient issue category"
+    },
+    {
+      "name": "mentions_confusion",
+      "type": "boolean",
+      "description": "True if confusion/friction is explicitly described"
+    }
+  ]
+}

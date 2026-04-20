@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import List
 
 from .errors import DepipelineError
 from .extraction import extract_text_with_diagnostics
+from .ollama_client import OllamaClient, OllamaConfig
+from .schema import load_schema_file
 from .segmentation import segment_entries
+from .structured_extraction import extract_structured_batch
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -43,6 +47,48 @@ def main(argv: List[str] | None = None) -> int:
         default=650,
         help="Target chunk size for dense text with weak/no delimiters (default: 650)",
     )
+    parser.add_argument(
+        "--schema-file",
+        type=str,
+        default="",
+        help="Optional schema JSON file for LLM structured extraction",
+    )
+    parser.add_argument(
+        "--ollama-model",
+        type=str,
+        default="llama3.2:3b",
+        help="Ollama model to use when --schema-file is provided",
+    )
+    parser.add_argument(
+        "--ollama-base-url",
+        type=str,
+        default="http://localhost:11434",
+        help="Ollama base URL (default: http://localhost:11434)",
+    )
+    parser.add_argument(
+        "--ollama-timeout-seconds",
+        type=int,
+        default=90,
+        help="Ollama request timeout in seconds (default: 90)",
+    )
+    parser.add_argument(
+        "--ollama-temperature",
+        type=float,
+        default=0.0,
+        help="Ollama temperature (default: 0.0 for deterministic extraction)",
+    )
+    parser.add_argument(
+        "--raw-response-dir",
+        type=str,
+        default=".depipeline_logs/raw_responses",
+        help="Directory where invalid model responses are saved",
+    )
+    parser.add_argument(
+        "--json-out",
+        type=str,
+        default="",
+        help="Optional output path for structured extraction JSON rows",
+    )
 
     args = parser.parse_args(argv)
 
@@ -65,7 +111,7 @@ def main(argv: List[str] | None = None) -> int:
 
             # Ensure IDs remain unique and deterministic across multiple files.
             for entry in entries:
-                entry["id"] = f"{path.stem}-{entry['id']}"
+                entry["id"] = f"{path.stem}-{path.suffix.lstrip('.')}-{entry['id']}"
 
             all_entries.extend(entries)
             files_processed += 1
@@ -73,12 +119,42 @@ def main(argv: List[str] | None = None) -> int:
         print(f"Files processed: {files_processed}")
         print(f"Entries produced: {len(all_entries)}")
 
-        for entry in all_entries[: max(0, args.sample)]:
-            raw_text = str(entry["raw_text"]).strip()
-            preview = raw_text.replace("\n", " ")
-            if len(preview) > 160:
-                preview = preview[:157] + "..."
-            print(f"- {entry['id']}: {preview}")
+        if args.schema_file:
+            schema_fields = load_schema_file(args.schema_file)
+            client = OllamaClient(
+                OllamaConfig(
+                    model=args.ollama_model,
+                    base_url=args.ollama_base_url,
+                    timeout_seconds=args.ollama_timeout_seconds,
+                    temperature=args.ollama_temperature,
+                )
+            )
+
+            rows = extract_structured_batch(
+                all_entries,
+                schema_fields,
+                client,
+                raw_response_dir=args.raw_response_dir,
+                show_progress=True,
+            )
+
+            print(f"Structured rows produced: {len(rows)}")
+            for row in rows[: max(0, args.sample)]:
+                preview_fields = {field.name: row.get(field.name) for field in schema_fields}
+                print(f"- {row.get('id')}: {preview_fields}")
+
+            if args.json_out:
+                output_path = Path(args.json_out)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+                print(f"Wrote structured output: {output_path}")
+        else:
+            for entry in all_entries[: max(0, args.sample)]:
+                raw_text = str(entry["raw_text"]).strip()
+                preview = raw_text.replace("\n", " ")
+                if len(preview) > 160:
+                    preview = preview[:157] + "..."
+                print(f"- {entry['id']}: {preview}")
 
         return 0
     except DepipelineError as exc:

@@ -1,0 +1,26 @@
+{
+  "fields": [
+    {
+      "name": "date",
+      "type": "string",
+      "description": "Date mentioned for the entry"
+    },
+    {
+      "name": "platform",
+      "type": "enum",
+      "enum": ["YouTube", "Book", "Podcast", "Website", "Unknown"],
+      "description": "Main platform referenced"
+    },
+    {
+      "name": "sentiment",
+      "type": "enum",
+      "enum": ["positive", "neutral", "negative"],
+      "description": "Overall sentiment of the feedback"
+    },
+    {
+      "name": "mentions_confusion",
+      "type": "boolean",
+      "description": "True if confusion/friction is explicitly mentioned"
+    }
+  ]
+}
