@@ -39,4 +39,4 @@ To run against the generated diary batch in bash:
 
 Run the typed extraction regression checks:
 
-`python -m unittest tests/test_structured_extraction.py -v`
+`python -m unittest tests/test_structured_extraction.py tests/test_validation_layer.py -v`

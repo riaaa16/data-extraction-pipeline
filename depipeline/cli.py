@@ -10,7 +10,7 @@ from .extraction import extract_text_with_diagnostics
 from .ollama_client import OllamaClient, OllamaConfig
 from .schema import load_schema_file
 from .segmentation import segment_entries
-from .structured_extraction import extract_structured_batch
+from .structured_extraction import extract_structured_batch_with_validation
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -89,6 +89,12 @@ def main(argv: List[str] | None = None) -> int:
         default="",
         help="Optional output path for structured extraction JSON rows",
     )
+    parser.add_argument(
+        "--validation-max-retries",
+        type=int,
+        default=2,
+        help="Maximum retries per entry for validation repair (default: 2)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -130,18 +136,29 @@ def main(argv: List[str] | None = None) -> int:
                 )
             )
 
-            rows = extract_structured_batch(
+            rows, run_report = extract_structured_batch_with_validation(
                 all_entries,
                 schema_fields,
                 client,
                 raw_response_dir=args.raw_response_dir,
                 show_progress=True,
+                max_retries=max(0, args.validation_max_retries),
             )
 
             print(f"Structured rows produced: {len(rows)}")
+            print(
+                "Run report: "
+                f"total={run_report['total_entries']}, "
+                f"first_pass={run_report['valid_first_pass']}, "
+                f"retried={run_report['retried']}, "
+                f"failed={run_report['failed']}"
+            )
             for row in rows[: max(0, args.sample)]:
                 preview_fields = {field.name: row.get(field.name) for field in schema_fields}
-                print(f"- {row.get('id')}: {preview_fields}")
+                print(
+                    f"- {row.get('id')}: {preview_fields} "
+                    f"(confidence={row.get('confidence')}, status={row.get('_meta', {}).get('status')})"
+                )
 
             if args.json_out:
                 output_path = Path(args.json_out)

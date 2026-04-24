@@ -4,17 +4,19 @@ AI-powered pipeline for converting unstructured UX research text (PDF/TXT) into 
 
 Current implementation covers:
 - Sprint 1 (complete): extraction + segmentation
-- Sprint 2 (active): local LLM structured extraction via Ollama
+- Sprint 2 (complete): local LLM structured extraction via Ollama
+- Sprint 3 (active): validation, retry repair loop, and confidence scoring
 
 ## What This Project Does
 
 1. Reads `.txt` and text-based `.pdf` files.
 2. Segments raw text into entries (`id`, `raw_text`).
 3. Optionally uses a local LLM (Ollama) to map entries into a user-defined schema.
+4. Validates extracted rows, retries invalid outputs with repair instructions, and adds per-row confidence.
 
 High-level flow:
 
-`PDF/TXT -> Text Extraction -> Entry Segmentation -> (Optional) LLM Structured Extraction`
+`PDF/TXT -> Text Extraction -> Entry Segmentation -> LLM Structured Extraction -> Validation/Retry -> Confidence`
 
 ## Tech Stack
 
@@ -72,6 +74,7 @@ python -m depipeline \
   fixtures/core/sample.txt fixtures/core/sample.pdf \
   --schema-file fixtures/schemas/schema.typed.sample.json \
   --ollama-model llama3.2:3b \
+  --validation-max-retries 2 \
   --json-out .depipeline_logs/sprint2_output.json \
   --sample 3
 ```
@@ -82,13 +85,38 @@ python -m depipeline \
 python -m depipeline fixtures/generated/diary/*.pdf \
   --schema-file fixtures/schemas/schema.typed.sample.json \
   --ollama-model llama3.2:3b \
+  --validation-max-retries 2 \
   --sample 3
 ```
+
+## Common Issues
+
+### 1) `sample.txt` or `sample.pdf` not found
+
+If you see a file-not-found error for `sample.txt`/`sample.pdf`, use the fixture paths under `fixtures/core/` and run from the repository root:
+
+```bash
+python -m depipeline fixtures/core/sample.txt fixtures/core/sample.pdf \
+  --schema-file fixtures/schemas/schema.typed.sample.json \
+  --ollama-model llama3.2:3b \
+  --validation-max-retries 2 \
+  --sample 2
+```
+
+### 2) Unable to reach Ollama at `localhost:11434`
+
+Start Ollama in a separate terminal before running schema-driven extraction:
+
+```bash
+ollama serve
+```
+
+Then rerun your pipeline command.
 
 ## Regression Tests
 
 ```bash
-python -m unittest tests/test_structured_extraction.py -v
+python -m unittest tests/test_structured_extraction.py tests/test_validation_layer.py -v
 ```
 
 ## Fixtures
@@ -101,9 +129,10 @@ See `sprints/sprints.md`.
 
 At the moment:
 - Sprint 01: complete
-- Sprint 02: active
+- Sprint 02: complete
+- Sprint 03: active
 
 ## Current Limitations
 
 - OCR is not implemented yet (scanned image-only PDFs are flagged as unsupported in current pipeline mode).
-- Full validation/retry/confidence scoring is planned for Sprint 3.
+- Streamlit UI workflow is planned for Sprint 4.
