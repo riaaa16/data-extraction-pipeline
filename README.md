@@ -1,6 +1,6 @@
 # Data Extraction Pipeline
 
-AI-powered pipeline for converting unstructured UX research text (PDF/TXT) into structured rows.
+AI-powered pipeline for converting unstructured UX research text (PDF/TXT/DOCX) into structured rows.
 
 Current implementation covers:
 - Sprint 1 (complete): extraction + segmentation
@@ -9,14 +9,14 @@ Current implementation covers:
 
 ## What This Project Does
 
-1. Reads `.txt` and text-based `.pdf` files.
+1. Reads `.txt`, `.docx`, and text-based `.pdf` files.
 2. Segments raw text into entries (`id`, `raw_text`).
 3. Optionally uses a local LLM (Ollama) to map entries into a user-defined schema.
 4. Validates extracted rows, retries invalid outputs with repair instructions, and adds per-row confidence.
 
 High-level flow:
 
-`PDF/TXT -> Text Extraction -> Entry Segmentation -> LLM Structured Extraction -> Validation/Retry -> Confidence`
+`PDF/TXT/DOCX -> Text Extraction -> Entry Segmentation -> LLM Structured Extraction -> Validation/Retry -> Confidence`
 
 ## Tech Stack
 
@@ -28,7 +28,7 @@ High-level flow:
 
 - `depipeline/` - core pipeline package
 - `fixtures/` - sample data and schema fixtures
-- `scripts/` - helper scripts (for example, sample PDF generator)
+- `scripts/` - helper scripts (for example, sample fixture generator)
 - `tests/` - regression tests
 - `sprints/` - sprint plans and status
 - `docs/` - project and UI specs
@@ -65,6 +65,12 @@ ollama pull llama3.2:3b
 
 ```bash
 python -m depipeline fixtures/core/sample.txt fixtures/core/sample.pdf --sample 3
+```
+
+Example DOCX run:
+
+```bash
+python -m depipeline path/to/notes.docx --sample 3
 ```
 
 ## B) Sprint 2 mode (schema-driven structured extraction)
@@ -116,7 +122,7 @@ Then rerun your pipeline command.
 ## Regression Tests
 
 ```bash
-python -m unittest tests/test_structured_extraction.py tests/test_validation_layer.py -v
+python -m unittest tests/test_extraction.py tests/test_structured_extraction.py tests/test_validation_layer.py -v
 ```
 
 ## Fixtures

@@ -12,6 +12,11 @@ try:
 except Exception:  # pragma: no cover
     fitz = None
 
+try:
+    from docx import Document  # python-docx
+except Exception:  # pragma: no cover
+    Document = None
+
 
 PathLike = Union[str, Path]
 
@@ -28,6 +33,7 @@ def extract_text(path: PathLike) -> str:
 
     Supported:
     - .txt
+    - .docx
     - .pdf (text-based; scanned PDFs are detected and rejected)
 
     Returns the extracted text as a string.
@@ -52,6 +58,10 @@ def extract_text_with_diagnostics(path: PathLike) -> ExtractionDiagnostics:
         text = _extract_txt(file_path)
         return ExtractionDiagnostics(text=text, warnings=[], is_scanned_pdf=False)
 
+    if suffix == ".docx":
+        text = _extract_docx(file_path)
+        return ExtractionDiagnostics(text=text, warnings=[], is_scanned_pdf=False)
+
     if suffix == ".pdf":
         return _extract_pdf(file_path)
 
@@ -74,6 +84,34 @@ def _extract_txt(path: Path) -> str:
             return normalize_text(f.read())
     except Exception as exc:
         raise ExtractionError(f"Failed reading text file: {path}") from (last_error or exc)
+
+
+def _extract_docx(path: Path) -> str:
+    if Document is None:
+        raise ExtractionError(
+            "python-docx is not installed. Install dependencies with: pip install -r requirements.txt"
+        )
+
+    try:
+        doc = Document(str(path))
+    except Exception as exc:
+        raise ExtractionError(f"Failed opening DOCX: {path}") from exc
+
+    blocks: List[str] = []
+
+    for paragraph in doc.paragraphs:
+        text = normalize_text(paragraph.text or "")
+        if text:
+            blocks.append(text)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                text = normalize_text(cell.text or "")
+                if text:
+                    blocks.append(text)
+
+    return normalize_text("\n\n".join(blocks))
 
 
 def _extract_pdf(path: Path) -> ExtractionDiagnostics:

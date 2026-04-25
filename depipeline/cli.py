@@ -21,7 +21,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "paths",
         nargs="+",
-        help="One or more input files (.txt, .pdf)",
+        help="One or more input files (.txt, .docx, .pdf)",
     )
     parser.add_argument(
         "--sample",

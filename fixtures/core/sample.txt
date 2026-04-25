@@ -6,7 +6,7 @@ Date: 2026-04-01
 Alex said onboarding felt confusing at first because the instructions were spread across multiple pages.
 They expected a single checklist.
 
-They liked the search feature once they found it, but they didn’t notice the filter controls.
+They liked the search feature once they found it, but they did not notice the filter controls.
 
 Quote: "I kept thinking I missed a step."
 

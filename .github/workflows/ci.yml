@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate required core fixtures
+        run: |
+          missing=0
+          for path in \
+            fixtures/core/sample.txt \
+            fixtures/core/sample.docx \
+            fixtures/core/sample.pdf
+          do
+            if [[ -f "$path" ]]; then
+              echo "OK: $path"
+            else
+              echo "ERROR: Missing required fixture: $path"
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -ne 0 ]]; then
+            echo "Fixture validation failed. Ensure all core fixtures are committed."
+            exit 1
+          fi
+
+      - name: Run regression tests
+        run: |
+          python -m unittest tests/test_extraction.py tests/test_structured_extraction.py tests/test_validation_layer.py -v

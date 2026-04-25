@@ -2,10 +2,13 @@
 
 This folder holds small sample inputs used for smoke-testing the pipeline.
 
+The pipeline accepts `.txt`, `.docx`, and `.pdf` inputs.
+
 ## Layout
 
 - `core/`
-   - `sample.txt` (committed baseline text fixture)
+   - `sample.txt` (generated baseline text fixture)
+   - `sample.docx` (generated baseline DOCX fixture)
    - `sample.pdf` (generated baseline PDF fixture)
 - `schemas/`
    - `schema.sample.json` (basic Sprint 2 extraction schema)
@@ -13,7 +16,7 @@ This folder holds small sample inputs used for smoke-testing the pipeline.
 - `generated/`
    - `diary/` (bulk generated PDFs for realism/coverage)
 
-## Generate sample PDF
+## Generate core sample fixtures
 
 1. Install dependencies:
 
@@ -23,7 +26,11 @@ This folder holds small sample inputs used for smoke-testing the pipeline.
 
    `python scripts/make_sample_pdf.py`
 
-This creates `fixtures/core/sample.pdf`.
+This creates:
+
+- `fixtures/core/sample.txt`
+- `fixtures/core/sample.docx`
+- `fixtures/core/sample.pdf`
 
 ## Sprint 2 typed-schema smoke test
 
@@ -39,4 +46,4 @@ To run against the generated diary batch in bash:
 
 Run the typed extraction regression checks:
 
-`python -m unittest tests/test_structured_extraction.py tests/test_validation_layer.py -v`
+`python -m unittest tests/test_extraction.py tests/test_structured_extraction.py tests/test_validation_layer.py -v`
