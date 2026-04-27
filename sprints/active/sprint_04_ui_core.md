@@ -1,13 +1,13 @@
 # Sprint 04: UI Core (Streamlit)
 
 ## Goal
-Deliver the core guided workflow UI: Upload → Schema → Processing → Results, enabling users to run the pipeline end-to-end and export CSV.
+Deliver the core guided workflow UI: Upload -> Schema -> Processing -> Results, enabling users to run the pipeline end-to-end and export CSV.
 
 ## Scope
 - Streamlit app with the core screens defined in the UI spec
 - File upload (PDF/TXT/DOCX) and file list
 - Schema builder for field definition
-- Run pipeline (extraction → segmentation → LLM → validation)
+- Run pipeline (extraction -> segmentation -> LLM -> validation)
 - Results table + CSV export
 
 ## Non-goals (explicitly out of scope)
@@ -16,7 +16,7 @@ Deliver the core guided workflow UI: Upload → Schema → Processing → Result
 - Extra UX beyond the provided screens (no additional pages/modals/features)
 
 ## Deliverables
-- A Streamlit app that follows the linear workflow described in [docs/ui_specs.md](../docs/ui_specs.md):
+- A Streamlit app that follows the linear workflow described in [docs/ui_specs.md](../../docs/ui_specs.md):
   - Upload Screen
   - Schema Builder
   - Processing Screen
@@ -36,14 +36,14 @@ Deliver the core guided workflow UI: Upload → Schema → Processing → Result
 2. **Upload screen**
    - Implement drag-and-drop upload supporting `.pdf`, `.txt`, and `.docx`.
    - Display uploaded file list.
-   - Enable “Continue” only when at least one file is uploaded.
+   - Enable "Continue" only when at least one file is uploaded.
 
 3. **Schema builder**
    - Implement field list + field editor:
      - name
      - type
      - enum choices (only if type is enum)
-   - Add “+ Add Field” and “Run Processing” actions.
+   - Add "+ Add Field" and "Run Processing" actions.
 
 4. **Processing screen**
    - Run the pipeline with visible progress:
@@ -55,7 +55,7 @@ Deliver the core guided workflow UI: Upload → Schema → Processing → Result
 
 5. **Results screen**
    - Display a table with key columns including `id` and `confidence`.
-   - Provide “Export CSV” action.
+   - Provide "Export CSV" action.
    - Provide a way to open a single row in Entry Detail.
 
 6. **Entry detail**
@@ -64,7 +64,7 @@ Deliver the core guided workflow UI: Upload → Schema → Processing → Result
 
 ## Acceptance Criteria
 - A user can complete the exact workflow:
-   - Upload PDF/TXT/DOCX → Continue → Define schema → Run Processing → View Results → Export CSV
+  - Upload PDF/TXT/DOCX -> Continue -> Define schema -> Run Processing -> View Results -> Export CSV
 - The exported CSV includes all rows and the expected columns.
 - Entry Detail edits are reflected in the Results table and CSV.
 - The UI does not introduce screens/components outside the UI spec.

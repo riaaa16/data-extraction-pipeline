@@ -4,7 +4,7 @@ Each sprint is documented as its own file (Goal / Scope / Non-goals / Deliverabl
 
 - [Sprint 01: Setup & Parsing (Complete)](complete/sprint_01_setup_parsing.md)
 - [Sprint 02: LLM Extraction (Complete)](complete/sprint_02_llm_extraction.md)
-- [Sprint 03: Validation Layer (Active)](active/sprint_03_validation_layer.md)
-- [Sprint 04: UI Core (Streamlit)](sprint_04_ui_core.md)
+- [Sprint 03: Validation Layer (Complete)](complete/sprint_03_validation_layer.md)
+- [Sprint 04: UI Core (Streamlit) (Active)](active/sprint_04_ui_core.md)
 - [Sprint 05: Insights](sprint_05_insights.md)
 - [Sprint 06 (Optional): Semantic Search & Theme Assignment](sprint_06_optional_semantic_search.md)

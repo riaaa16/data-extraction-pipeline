@@ -47,3 +47,7 @@ To run against the generated diary batch in bash:
 Run the typed extraction regression checks:
 
 `python -m unittest tests/test_extraction.py tests/test_structured_extraction.py tests/test_validation_layer.py -v`
+
+Run the workflow smoke test script (no browser, no Ollama required):
+
+`python scripts/test_workflow.py`

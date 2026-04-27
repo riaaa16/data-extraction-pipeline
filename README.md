@@ -5,7 +5,8 @@ AI-powered pipeline for converting unstructured UX research text (PDF/TXT/DOCX) 
 Current implementation covers:
 - Sprint 1 (complete): extraction + segmentation
 - Sprint 2 (complete): local LLM structured extraction via Ollama
-- Sprint 3 (active): validation, retry repair loop, and confidence scoring
+- Sprint 3 (complete): validation, retry repair loop, and confidence scoring
+- Sprint 4 (active): guided Streamlit workflow and CSV export
 
 ## What This Project Does
 
@@ -95,6 +96,16 @@ python -m depipeline fixtures/generated/diary/*.pdf \
   --sample 3
 ```
 
+## Run the Streamlit App (Sprint 4)
+
+```bash
+streamlit run app.py
+```
+
+The UI flow is:
+
+`Upload -> Schema -> Processing -> Results -> Entry Detail`
+
 ## Common Issues
 
 ### 1) `sample.txt` or `sample.pdf` not found
@@ -125,6 +136,14 @@ Then rerun your pipeline command.
 python -m unittest tests/test_extraction.py tests/test_structured_extraction.py tests/test_validation_layer.py -v
 ```
 
+## Workflow Smoke Test Script
+
+This script validates the guided workflow logic (extract -> segment -> structured extraction -> CSV export) without requiring a browser session:
+
+```bash
+python scripts/test_workflow.py
+```
+
 ## Fixtures
 
 See `fixtures/README.md` for fixture organization and additional examples.
@@ -136,9 +155,10 @@ See `sprints/sprints.md`.
 At the moment:
 - Sprint 01: complete
 - Sprint 02: complete
-- Sprint 03: active
+- Sprint 03: complete
+- Sprint 04: active
 
 ## Current Limitations
 
 - OCR is not implemented yet (scanned image-only PDFs are flagged as unsupported in current pipeline mode).
-- Streamlit UI workflow is planned for Sprint 4.
+- Insights dashboard is planned for Sprint 5.

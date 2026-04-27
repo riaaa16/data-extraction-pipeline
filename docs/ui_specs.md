@@ -2,7 +2,7 @@
 
 ## Overview
 This UI follows a guided, linear workflow:
-Upload → Schema → Processing → Results → Insights
+Upload → Schema → Processing → Results
 
 Each screen includes:
 - Purpose
@@ -20,6 +20,8 @@ Allow users to upload unstructured data files.
 - File upload (drag & drop)
 - Uploaded file list
 - Continue button
+
+Accepted file types: `.pdf`, `.txt`, `.docx`.
 
 ### Wireframe
 ```

@@ -46,3 +46,7 @@ jobs:
       - name: Run regression tests
         run: |
           python -m unittest tests/test_extraction.py tests/test_structured_extraction.py tests/test_validation_layer.py -v
+
+      - name: Run workflow smoke test script
+        run: |
+          python scripts/test_workflow.py
