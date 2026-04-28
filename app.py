@@ -4,10 +4,14 @@ import csv
 import io
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import quote_plus, unquote_plus
 from uuid import uuid4
+
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import streamlit as st
 
@@ -30,6 +34,7 @@ STEP_RESULTS = "results"
 STEP_DETAIL = "detail"
 DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+PRIMARY_ACCENT = "#4F6CF7"
 
 
 def _init_state() -> None:
@@ -37,20 +42,25 @@ def _init_state() -> None:
         "step": STEP_UPLOAD,
         "session_id": uuid4().hex,
         "uploaded_files": [],
+        "upload_total_bytes": 0,
         "schema_fields": [
             {
+                "id": uuid4().hex,
                 "name": "participant_name",
                 "type": "string",
                 "enum": "",
                 "description": "",
             }
         ],
+        "schema_editor_ns": 0,
+        "schema_ready": False,
         "entries": [],
         "rows": [],
         "run_report": None,
         "pipeline_error": "",
         "processing_done": False,
         "selected_row_id": "",
+        "show_entry_detail": False,
         "processing_metrics": {
             "files": 0,
             "entries": 0,
@@ -68,31 +78,216 @@ def _init_state() -> None:
         "sample_preview_count": 20,
         "schema_save_name": "",
         "saved_schema_name": "",
+        "regex_suggestion": "",
     }
 
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
+    # Backwards-compat: older session state may have schema fields without stable IDs.
+    try:
+        st.session_state["schema_fields"] = _ensure_schema_field_ids(
+            list(st.session_state.get("schema_fields") or [])
+        )
+    except Exception:
+        # If schema fields are malformed, keep whatever is there; validation will catch it.
+        pass
 
-def _progress_header() -> None:
-    step = st.session_state["step"]
-    ordered = [STEP_UPLOAD, STEP_SCHEMA, STEP_PROCESSING, STEP_RESULTS, STEP_DETAIL]
-    labels = {
-        STEP_UPLOAD: "Upload",
-        STEP_SCHEMA: "Schema",
-        STEP_PROCESSING: "Processing",
-        STEP_RESULTS: "Results",
-        STEP_DETAIL: "Entry Detail",
-    }
 
-    active_idx = ordered.index(step)
-    chips = []
-    for idx, key in enumerate(ordered):
-        marker = "[x]" if idx <= active_idx else "[ ]"
-        chips.append(f"{marker} {labels[key]}")
+def _ensure_schema_field_ids(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for field in fields:
+        field_id = field.get("id")
+        if not isinstance(field_id, str) or not field_id.strip():
+            field["id"] = uuid4().hex
+    return fields
 
-    st.caption(" -> ".join(chips))
+
+def _schema_form_with_fresh_ids(form_fields: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for field in form_fields:
+        item: Dict[str, Any] = dict(field)
+        item["id"] = uuid4().hex
+        out.append(item)
+    return out
+
+
+@dataclass(frozen=True)
+class _StepInfo:
+    key: str
+    label: str
+
+
+def _step_order() -> List[_StepInfo]:
+    return [
+        _StepInfo(STEP_UPLOAD, "Upload"),
+        _StepInfo(STEP_SCHEMA, "Schema"),
+        _StepInfo(STEP_PROCESSING, "Process"),
+        _StepInfo(STEP_RESULTS, "Results"),
+        _StepInfo(STEP_DETAIL, "Entry Detail"),
+    ]
+
+
+def _format_bytes(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _completed_steps() -> set[str]:
+    completed = set()
+    if st.session_state.get("uploaded_files"):
+        completed.add(STEP_UPLOAD)
+    if st.session_state.get("schema_ready"):
+        completed.add(STEP_SCHEMA)
+    if st.session_state.get("processing_done"):
+        completed.add(STEP_PROCESSING)
+    if st.session_state.get("rows"):
+        completed.add(STEP_RESULTS)
+    if st.session_state.get("selected_row_id"):
+        completed.add(STEP_DETAIL)
+    return completed
+
+
+def _render_stepper() -> None:
+    steps = _step_order()
+    active = st.session_state["step"]
+    completed = _completed_steps()
+
+    st.markdown(
+        """
+        <style>
+        .stepper {display:flex; justify-content:space-between; gap:8px; margin:8px 0 6px 0;}
+        .stepper-item {flex:1; text-align:center;}
+        .stepper-dot {width:18px; height:18px; border-radius:50%; display:inline-block;}
+        .stepper-dot.done {background:#22C55E;}
+        .stepper-dot.active {background:#4F6CF7;}
+        .stepper-dot.future {background:#CBD5E1;}
+        .stepper-label {text-align:center; color:#6B7280; font-size:12px; margin-top:6px;}
+        .stepper-link {text-decoration:none; color:inherit;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    items = []
+    for info in steps:
+        if info.key in completed:
+            cls = "done"
+        elif info.key == active:
+            cls = "active"
+        else:
+            cls = "future"
+
+        if info.key == STEP_UPLOAD:
+            allowed = True
+        elif info.key == STEP_SCHEMA:
+            allowed = bool(st.session_state.get("uploaded_files"))
+        elif info.key == STEP_PROCESSING:
+            allowed = bool(st.session_state.get("schema_ready"))
+        elif info.key == STEP_RESULTS:
+            allowed = bool(st.session_state.get("processing_done"))
+        else:
+            allowed = bool(st.session_state.get("rows"))
+
+        dot = f"<span class='stepper-dot {cls}'></span>"
+        label = f"<div class='stepper-label'>{info.label}</div>"
+        if allowed:
+            item = (
+                f"<a class='stepper-link' href='?nav={info.key}'>"
+                f"{dot}{label}</a>"
+            )
+        else:
+            item = f"{dot}{label}"
+
+        items.append(f"<div class='stepper-item'>{item}</div>")
+
+    st.markdown(f"<div class='stepper'>{''.join(items)}</div>", unsafe_allow_html=True)
+
+
+def _test_ollama_connection(base_url: str, timeout_seconds: int) -> tuple[bool, str]:
+    endpoint = f"{base_url.rstrip('/')}/api/tags"
+    req = urllib_request.Request(endpoint, method="GET")
+    try:
+        with urllib_request.urlopen(req, timeout=timeout_seconds) as response:
+            if response.status != 200:
+                return False, f"Unexpected status: {response.status}"
+    except urllib_error.URLError as exc:
+        return False, f"Unable to reach Ollama: {exc}"
+    except Exception as exc:
+        return False, f"Connection failed: {exc}"
+    return True, "Ollama is reachable"
+
+
+def _render_sidebar() -> None:
+    steps = _step_order()
+    active = st.session_state["step"]
+    completed = _completed_steps()
+
+    with st.sidebar:
+        st.markdown(
+            f"<div style='display:flex; align-items:center; gap:8px;'>"
+            f"<div style='width:12px; height:12px; background:{PRIMARY_ACCENT}; border-radius:2px;'></div>"
+            "<div style='font-weight:600;'>DE Pipeline</div>"
+            "</div>"
+            "<div style='color:#6B7280; font-size:12px; margin-top:4px;'>"
+            "Data Extraction Pipeline</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("---")
+        st.markdown("**Navigation**")
+
+        for info in steps:
+            label = info.label
+            is_active = info.key == active
+            is_completed = info.key in completed
+            icon = "✅" if is_completed else ("●" if is_active else "○")
+
+            if info.key == STEP_UPLOAD:
+                allowed = True
+            elif info.key == STEP_SCHEMA:
+                allowed = bool(st.session_state.get("uploaded_files"))
+            elif info.key == STEP_PROCESSING:
+                allowed = bool(st.session_state.get("schema_ready"))
+            elif info.key == STEP_RESULTS:
+                allowed = bool(st.session_state.get("processing_done"))
+            else:
+                allowed = bool(st.session_state.get("rows"))
+
+            if st.button(f"{icon} {label}", disabled=not allowed, key=f"nav_{info.key}"):
+                _set_step(info.key)
+                st.rerun()
+
+        st.markdown("---")
+        with st.expander("Ollama", expanded=False):
+            st.text_input("Model", key="ollama_model")
+            st.text_input("Base URL", key="ollama_base_url")
+            st.number_input(
+                "Timeout (minutes)",
+                min_value=1,
+                max_value=30,
+                key="ollama_timeout_minutes",
+            )
+            st.number_input(
+                "Validation retries",
+                min_value=0,
+                max_value=10,
+                key="validation_max_retries",
+            )
+            if st.button("Test connection"):
+                timeout_minutes = float(st.session_state.get("ollama_timeout_minutes", 3))
+                timeout_seconds = max(5, int(timeout_minutes * 60))
+                ok, message = _test_ollama_connection(
+                    st.session_state.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL),
+                    timeout_seconds,
+                )
+                if ok:
+                    st.success(message)
+                else:
+                    st.error(message)
 
 
 def _set_step(step: str) -> None:
@@ -144,6 +339,10 @@ def _suggest_regex_from_sample(
     regex = payload.get("regex") if isinstance(payload, dict) else None
     if not isinstance(regex, str) or not regex.strip():
         raise DepipelineError("Regex suggestion JSON must include a non-empty 'regex' string")
+
+    # Strip control characters that can appear in model output (e.g., backspace).
+    regex = re.sub(r"[\x00-\x1F\x7F]", "", regex).strip()
+    regex = re.sub(r"\s+", " ", regex)
 
     try:
         re.compile(regex, re.MULTILINE)
@@ -201,46 +400,60 @@ def _sanitize_schema_name(name: str) -> str:
 
 
 def _upload_screen() -> None:
-    st.subheader("1) Upload Files")
+    st.subheader("Upload Files")
+    st.caption("Add the documents you want to extract from.")
+
     uploads = st.file_uploader(
-        "Upload one or more files",
+        "Drag & drop files here",
         type=SUPPORTED_UPLOAD_TYPES,
         accept_multiple_files=True,
     )
 
-    normalized: List[Dict[str, Any]] = []
-    for uploaded in uploads or []:
-        normalized.append(
-            {
-                "name": uploaded.name,
-                "bytes": uploaded.getvalue(),
-                "size": uploaded.size,
-            }
-        )
+    if uploads:
+        existing = {(f["name"], f["size"]) for f in st.session_state["uploaded_files"]}
+        for uploaded in uploads:
+            key = (uploaded.name, uploaded.size)
+            if key not in existing:
+                st.session_state["uploaded_files"].append(
+                    {
+                        "name": uploaded.name,
+                        "bytes": uploaded.getvalue(),
+                        "size": uploaded.size,
+                    }
+                )
+                existing.add(key)
 
-    st.session_state["uploaded_files"] = normalized
+    total_bytes = sum(item["size"] for item in st.session_state["uploaded_files"])
+    st.session_state["upload_total_bytes"] = total_bytes
 
-    if normalized:
-        st.write("Uploaded files")
-        st.table(
-            [
-                {
-                    "name": item["name"],
-                    "size_bytes": item["size"],
-                }
-                for item in normalized
-            ]
+    if st.session_state["uploaded_files"]:
+        st.markdown("**Uploaded files**")
+        st.caption(
+            f"{len(st.session_state['uploaded_files'])} files · { _format_bytes(total_bytes) } total"
         )
+        for idx, item in enumerate(list(st.session_state["uploaded_files"])):
+            cols = st.columns([6, 2, 1])
+            cols[0].write(f"📄 {item['name']}")
+            cols[1].write(_format_bytes(item["size"]))
+            remove_align = cols[2].columns([1, 1], vertical_alignment="bottom")
+            if remove_align[1].button("✕", key=f"remove_upload_{idx}"):
+                st.session_state["uploaded_files"].pop(idx)
+                st.rerun()
     else:
         st.info("Upload at least one .txt, .docx, or .pdf file to continue.")
 
-    if st.button("Continue -> Schema", disabled=not normalized):
+    cols = st.columns([6, 2], vertical_alignment="bottom")
+    continue_align = cols[1].columns([1, 1], vertical_alignment="bottom")
+    if continue_align[1].button(
+        "Continue → Schema", disabled=not st.session_state["uploaded_files"]
+    ):
         _set_step(STEP_SCHEMA)
         st.rerun()
 
 
 def _schema_screen() -> None:
-    st.subheader("2) Schema Builder")
+    st.subheader("Schema Builder")
+    st.caption("Define the fields you want to extract from each entry.")
 
     # Keep defaults visible even if prior session state accidentally persisted empty strings.
     if not st.session_state.get("ollama_model"):
@@ -250,150 +463,147 @@ def _schema_screen() -> None:
     if not st.session_state.get("ollama_timeout_minutes"):
         st.session_state["ollama_timeout_minutes"] = 3
 
+    if st.session_state.get("segmentation_mode") not in {"Deterministic", "Regex", "LLM"}:
+        st.session_state["segmentation_mode"] = "Deterministic"
+
     pending_regex = str(st.session_state.get("segmentation_regex_pending", "")).strip()
     if pending_regex:
         st.session_state["segmentation_regex_patterns"] = pending_regex
         st.session_state["segmentation_regex_pending"] = ""
 
-    fields: List[Dict[str, str]] = st.session_state["schema_fields"]
+    schema_ns = int(st.session_state.get("schema_editor_ns", 0))
+    fields: List[Dict[str, Any]] = _ensure_schema_field_ids(
+        list(st.session_state.get("schema_fields") or [])
+    )
+    remove_field_id: str | None = None
 
-    for idx, field in enumerate(fields):
+    for field in fields:
+        field_id = str(field.get("id") or "")
         with st.container(border=True):
-            cols = st.columns([3, 2, 4, 1])
-            field["name"] = cols[0].text_input("Name", value=field.get("name", ""), key=f"name_{idx}")
+            cols = st.columns([3, 2, 4, 2], vertical_alignment="bottom")
+            field["name"] = cols[0].text_input(
+                "Name",
+                value=field.get("name", ""),
+                key=f"schema_{schema_ns}_name_{field_id}",
+            )
 
             field_type = cols[1].selectbox(
                 "Type",
                 options=["string", "number", "boolean", "enum"],
                 index=["string", "number", "boolean", "enum"].index(field.get("type", "string")),
-                key=f"type_{idx}",
+                key=f"schema_{schema_ns}_type_{field_id}",
             )
             field["type"] = field_type
 
             field["description"] = cols[2].text_input(
                 "Description",
                 value=field.get("description", ""),
-                key=f"description_{idx}",
+                key=f"schema_{schema_ns}_description_{field_id}",
             )
 
             if field_type == "enum":
                 field["enum"] = st.text_input(
                     "Enum values (comma-separated)",
                     value=field.get("enum", ""),
-                    key=f"enum_{idx}",
+                    key=f"schema_{schema_ns}_enum_{field_id}",
                 )
             else:
                 field["enum"] = ""
 
-            if cols[3].button("Remove", key=f"remove_{idx}"):
-                st.session_state["schema_fields"] = [
-                    f for j, f in enumerate(fields) if j != idx
-                ]
-                st.rerun()
+            if cols[3].button(
+                "Remove",
+                key=f"schema_{schema_ns}_remove_{field_id}",
+                use_container_width=True,
+            ):
+                remove_field_id = field_id
+
+    if remove_field_id:
+        st.session_state["schema_fields"] = [
+            f for f in fields if str(f.get("id") or "") != remove_field_id
+        ]
+        st.rerun()
 
     saved_dir = _saved_schema_dir()
     saved_paths = sorted(saved_dir.glob("*.json"))
     saved_names = [path.stem for path in saved_paths]
 
-    st.markdown("#### Saved Schemas")
-    schema_tools = st.columns([2, 1, 2, 1])
-    schema_tools[0].text_input("Schema name", key="schema_save_name")
-
-    if schema_tools[1].button("Save Schema"):
-        try:
-            # validate before writing
-            _build_schema_fields(fields)
-            schema_name = _sanitize_schema_name(st.session_state.get("schema_save_name", ""))
-            if not schema_name:
-                raise ValueError("Enter a schema name before saving")
-
-            payload = {"fields": _schema_payload_from_form(fields)}
-            out_path = saved_dir / f"{schema_name}.json"
-            out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            st.success(f"Saved schema: {out_path.name}")
-            st.rerun()
-        except (DepipelineError, ValueError) as exc:
-            st.error(str(exc))
-
-    schema_tools[2].selectbox(
-        "Load schema",
-        options=[""] + saved_names,
-        key="saved_schema_name",
-        help="Select a previously saved schema",
-    )
-    if schema_tools[3].button("Load"):
-        selected = st.session_state.get("saved_schema_name", "")
-        if not selected:
-            st.warning("Select a saved schema to load")
-        else:
-            try:
-                raw = json.loads((saved_dir / f"{selected}.json").read_text(encoding="utf-8"))
-                loaded = parse_schema_fields(raw.get("fields", []) if isinstance(raw, dict) else raw)
-                st.session_state["schema_fields"] = _schema_fields_to_form(loaded)
-                st.success(f"Loaded schema: {selected}")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Failed loading schema '{selected}': {exc}")
-
-    controls = st.columns([1, 1, 2])
-    if controls[0].button("+ Add Field"):
-        fields.append({"name": "", "type": "string", "enum": "", "description": ""})
+    add_cols = st.columns([1, 5], vertical_alignment="bottom")
+    if add_cols[0].button("+ Add Field"):
+        fields.append(
+            {
+                "id": uuid4().hex,
+                "name": "",
+                "type": "string",
+                "enum": "",
+                "description": "",
+            }
+        )
         st.session_state["schema_fields"] = fields
         st.rerun()
 
-    if controls[1].button("<- Back"):
-        _set_step(STEP_UPLOAD)
-        st.rerun()
+    st.session_state["schema_fields"] = fields
 
-    with controls[2]:
-        st.selectbox(
-            "Entry separation",
-            options=["Deterministic", "Regex", "LLM (boundaries)"],
+    with st.expander("Saved Schemas", expanded=False):
+        schema_tools = st.columns([2, 1, 2, 1], vertical_alignment="bottom")
+        schema_tools[0].text_input("Schema name", key="schema_save_name")
+
+        if schema_tools[1].button("💾 Save", use_container_width=True):
+            try:
+                _build_schema_fields(fields)
+                schema_name = _sanitize_schema_name(st.session_state.get("schema_save_name", ""))
+                if not schema_name:
+                    raise ValueError("Enter a schema name before saving")
+
+                payload = {"fields": _schema_payload_from_form(fields)}
+                out_path = saved_dir / f"{schema_name}.json"
+                out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                st.success("Saved.")
+            except (DepipelineError, ValueError) as exc:
+                st.error(str(exc))
+
+        schema_tools[2].selectbox(
+            "Load schema",
+            options=[""] + saved_names,
+            key="saved_schema_name",
+            help="Select a previously saved schema",
+        )
+        if schema_tools[3].button("📂 Load", use_container_width=True):
+            selected = st.session_state.get("saved_schema_name", "")
+            if not selected:
+                st.warning("Select a saved schema to load")
+            else:
+                try:
+                    raw = json.loads((saved_dir / f"{selected}.json").read_text(encoding="utf-8"))
+                    loaded = parse_schema_fields(raw.get("fields", []) if isinstance(raw, dict) else raw)
+                    st.session_state["schema_fields"] = _schema_form_with_fresh_ids(
+                        _schema_fields_to_form(loaded)
+                    )
+                    st.session_state["schema_editor_ns"] = int(
+                        st.session_state.get("schema_editor_ns", 0)
+                    ) + 1
+                    st.success("Loaded.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed loading schema '{selected}': {exc}")
+
+    with st.expander("Entry Separation", expanded=True):
+        st.radio(
+            "Mode",
+            options=["Deterministic", "Regex", "LLM"],
+            horizontal=True,
             key="segmentation_mode",
-            help=(
-                "Deterministic uses formatting rules (blank lines, bullets, anchors). "
-                "Regex splits when your patterns match. "
-                "LLM (boundaries) asks Ollama only for entry boundaries."
-            ),
         )
 
         mode = str(st.session_state.get("segmentation_mode"))
-        if mode == "Regex":
+        if mode == "Deterministic":
+            st.info("Entries will be split using built-in heuristics. No configuration needed.")
+        elif mode == "Regex":
             st.text_area(
-                "Entry boundary regex patterns (one per line)",
+                "Boundary patterns (one per line)",
                 key="segmentation_regex_patterns",
-                height=120,
-                help=(
-                    "Each regex marks the START of a new entry. Uses Python regex with multiline mode."
-                ),
+                height=100,
+                help="Each regex marks the START of a new entry. Uses Python regex with multiline mode.",
             )
-
-            st.markdown("**Regex helper (optional)**")
-            sample_heading = st.text_input(
-                "Sample heading",
-                help="Paste one example heading line; we'll suggest a regex for it.",
-            )
-            if st.button("Suggest regex with LLM"):
-                try:
-                    timeout_minutes = float(st.session_state.get("ollama_timeout_minutes", 3))
-                    timeout_seconds = max(10, int(timeout_minutes * 60))
-                    helper_client = OllamaClient(
-                        OllamaConfig(
-                            model=st.session_state["ollama_model"],
-                            base_url=st.session_state["ollama_base_url"],
-                            timeout_seconds=timeout_seconds,
-                        )
-                    )
-                    suggested = _suggest_regex_from_sample(
-                        sample_heading,
-                        helper_client,
-                        dataset_description=str(st.session_state.get("dataset_description", "")).strip() or None,
-                    )
-                    st.session_state["segmentation_regex_pending"] = suggested
-                    st.success("Regex suggested and applied")
-                    st.rerun()
-                except DepipelineError as exc:
-                    st.error(str(exc))
 
             presets = {
                 "Interview transcript - speakers": r"^[A-Z][A-Za-z .'-]{1,40}:\s+",
@@ -412,35 +622,59 @@ def _schema_screen() -> None:
                 st.session_state["segmentation_regex_patterns"] = presets[preset_name]
                 st.rerun()
 
-        if mode == "LLM (boundaries)":
+            with st.expander("LLM Regex Helper", expanded=False):
+                sample_heading = st.text_input(
+                    "Sample heading",
+                    help="Paste one example heading line; we'll suggest a regex for it.",
+                )
+                helper_actions = st.columns([1, 5], vertical_alignment="bottom")
+                if helper_actions[0].button("Suggest regex"):
+                    try:
+                        timeout_minutes = float(st.session_state.get("ollama_timeout_minutes", 3))
+                        timeout_seconds = max(10, int(timeout_minutes * 60))
+                        helper_client = OllamaClient(
+                            OllamaConfig(
+                                model=st.session_state["ollama_model"],
+                                base_url=st.session_state["ollama_base_url"],
+                                timeout_seconds=timeout_seconds,
+                            )
+                        )
+                        suggested = _suggest_regex_from_sample(
+                            sample_heading,
+                            helper_client,
+                            dataset_description=str(st.session_state.get("dataset_description", "")).strip() or None,
+                        )
+                        st.session_state["regex_suggestion"] = suggested
+                    except DepipelineError as exc:
+                        st.error(str(exc))
+
+                if st.session_state.get("regex_suggestion"):
+                    st.code(st.session_state["regex_suggestion"], language="text")
+                    if st.button("Use this pattern"):
+                        st.session_state["segmentation_regex_pending"] = st.session_state["regex_suggestion"]
+                        st.rerun()
+        else:
             st.text_area(
                 "Dataset description (optional)",
                 key="dataset_description",
-                height=100,
+                height=80,
                 help=(
                     "Describe what a single entry looks like (e.g., 'each bullet is a record', "
-                    "'each chat turn is an entry', 'each ticket begins with Ticket ID'). "
-                    "Used only for LLM entry separation."
+                    "'each chat turn is an entry', 'each ticket begins with Ticket ID')."
                 ),
             )
+            st.info(
+                "The LLM will identify entry boundaries and return start/end line ranges. "
+                "Errors will halt processing with an actionable message."
+            )
 
-        st.text_input("Ollama model", key="ollama_model")
-        st.text_input("Ollama base URL", key="ollama_base_url")
-        st.number_input(
-            "Ollama timeout (minutes)",
-            min_value=1,
-            max_value=30,
-            key="ollama_timeout_minutes",
-            help="Applies to entry separation (LLM mode) and structured extraction calls.",
-        )
-        st.number_input(
-            "Validation max retries",
-            min_value=0,
-            max_value=5,
-            key="validation_max_retries",
-        )
+    cols = st.columns([6, 2], vertical_alignment="bottom")
+    if cols[0].button("← Back"):
+        _set_step(STEP_UPLOAD)
+        st.rerun()
 
-    if st.button("Run Processing"):
+    run_align = cols[1].columns([1, 1], vertical_alignment="bottom")
+    if run_align[1].button("Run Processing →", type="primary"):
         if not st.session_state.get("uploaded_files"):
             st.error("No uploaded files found. Please return to Upload and add files.")
             return
@@ -452,6 +686,7 @@ def _schema_screen() -> None:
             return
 
         st.session_state["schema_field_objects"] = parsed_fields
+        st.session_state["schema_ready"] = True
         st.session_state["processing_done"] = False
         st.session_state["pipeline_error"] = ""
         _set_step(STEP_PROCESSING)
@@ -473,12 +708,31 @@ def _persist_uploads() -> List[Path]:
 
 
 def _processing_screen() -> None:
-    st.subheader("3) Processing")
-    st.write("Running extraction -> segmentation -> LLM extraction -> validation")
+    st.subheader("Processing")
+    st.caption("Running your pipeline. This may take a few minutes.")
 
     if st.session_state.get("processing_done"):
         if st.session_state.get("pipeline_error"):
             st.error(st.session_state["pipeline_error"])
+
+            msg = str(st.session_state.get("pipeline_error") or "")
+            ollama_down = any(
+                needle in msg.lower()
+                for needle in [
+                    "unable to reach ollama",
+                    "unable to connect to ollama",
+                    "timed out calling ollama",
+                ]
+            )
+            if ollama_down:
+                restart_cols = st.columns([6, 2], vertical_alignment="bottom")
+                if restart_cols[0].button("Restart process"):
+                    st.session_state["processing_done"] = False
+                    st.session_state["pipeline_error"] = ""
+                    st.session_state["rows"] = []
+                    st.session_state["entries"] = []
+                    st.session_state["run_report"] = {}
+                    st.rerun()
         else:
             st.success("Processing complete.")
             report = st.session_state.get("run_report") or {}
@@ -489,17 +743,24 @@ def _processing_screen() -> None:
                 f"Failed: {report.get('failed', 0)}"
             )
 
-        cols = st.columns(2)
+        cols = st.columns([6, 2], vertical_alignment="bottom")
         if cols[0].button("<- Back to Schema"):
             _set_step(STEP_SCHEMA)
             st.rerun()
 
-        if cols[1].button("Continue -> Results", disabled=bool(st.session_state.get("pipeline_error"))):
+        continue_align = cols[1].columns([1, 1], vertical_alignment="bottom")
+        if continue_align[1].button(
+            "Continue -> Results", disabled=bool(st.session_state.get("pipeline_error"))
+        ):
             _set_step(STEP_RESULTS)
             st.rerun()
         return
 
-    progress = st.progress(0)
+    st.markdown("**Stage Progress**")
+    extraction_bar = st.progress(0, text="Text Extraction")
+    segmentation_bar = st.progress(0, text="Segmentation")
+    llm_bar = st.progress(0, text="LLM Extraction")
+    validation_bar = st.progress(0, text="Validation")
     status = st.empty()
     metrics = st.empty()
 
@@ -529,8 +790,10 @@ def _processing_screen() -> None:
             for warning in diagnostics.warnings:
                 warnings.append(f"{path.name}: {warning}")
 
+            extraction_bar.progress(int((idx / total_files) * 100))
+
             mode = str(st.session_state.get("segmentation_mode", "Deterministic"))
-            if mode == "LLM (boundaries)":
+            if mode in {"LLM", "LLM (boundaries)"}:
                 try:
                     entries = segment_entries_llm_boundaries(
                         diagnostics.text,
@@ -552,17 +815,18 @@ def _processing_screen() -> None:
             else:
                 entries = segment_entries(diagnostics.text)
 
+            segmentation_bar.progress(int((idx / total_files) * 100))
+
             for entry in entries:
                 entry["id"] = f"{path.stem}-{path.suffix.lstrip('.')}-{entry['id']}"
             all_entries.extend(entries)
 
-            progress.progress(int((idx / total_files) * 30))
             metrics.write(
                 f"Files: {idx}/{total_files} | Entries so far: {len(all_entries)}"
             )
 
-        status.write("LLM extraction + validation")
-        progress.progress(45)
+        status.write("LLM extraction")
+        llm_bar.progress(10)
 
         rows, report = extract_structured_batch_with_validation(
             all_entries,
@@ -573,7 +837,10 @@ def _processing_screen() -> None:
             max_retries=int(st.session_state["validation_max_retries"]),
         )
 
-        progress.progress(100)
+        llm_bar.progress(100)
+        status.write("Validation")
+        validation_bar.progress(100)
+
         status.write("Validation complete")
         metrics.write(
             f"Files: {total_files}/{total_files} | Entries: {len(all_entries)} | Processed: {len(rows)}"
@@ -597,7 +864,7 @@ def _processing_screen() -> None:
 
 
 def _results_screen() -> None:
-    st.subheader("4) Results")
+    st.subheader("Results")
 
     rows: List[Dict[str, Any]] = st.session_state.get("rows", [])
     schema_fields: List[SchemaField] = st.session_state.get("schema_field_objects", [])
@@ -666,17 +933,20 @@ def _results_screen() -> None:
 
     effective_selected = table_selection_id or selected
 
-    controls = st.columns(2)
+    controls = st.columns([6, 2], vertical_alignment="bottom")
     if controls[0].button("<- Back to Processing"):
         _set_step(STEP_PROCESSING)
         st.rerun()
 
-    if controls[1].button("Open Entry Detail"):
+    open_align = controls[1].columns([1, 1], vertical_alignment="bottom")
+    if open_align[1].button("Open Entry Detail"):
         st.session_state["selected_row_id"] = effective_selected
-        st.query_params["step"] = "detail"
-        st.query_params["entry_id"] = quote_plus(effective_selected)
-        _set_step(STEP_DETAIL)
+        st.session_state["show_entry_detail"] = True
         st.rerun()
+
+    if st.session_state.get("show_entry_detail"):
+        st.divider()
+        _render_entry_detail_inline()
 
 
 def _rows_to_csv_bytes(rows: List[Dict[str, Any]], schema_fields: List[SchemaField]) -> bytes:
@@ -692,8 +962,8 @@ def _rows_to_csv_bytes(rows: List[Dict[str, Any]], schema_fields: List[SchemaFie
     return buffer.getvalue().encode("utf-8")
 
 
-def _entry_detail_screen() -> None:
-    st.subheader("5) Entry Detail")
+def _render_entry_detail_inline() -> None:
+    st.subheader("Entry Detail")
 
     rows: List[Dict[str, Any]] = st.session_state.get("rows", [])
     schema_fields: List[SchemaField] = st.session_state.get("schema_field_objects", [])
@@ -701,15 +971,10 @@ def _entry_detail_screen() -> None:
 
     if not rows:
         st.warning("No results available.")
-        if st.button("Back to Results"):
-            _set_step(STEP_RESULTS)
-            st.rerun()
         return
 
     row = next((item for item in rows if str(item.get("id", "")) == selected_id), rows[0])
     st.session_state["selected_row_id"] = str(row.get("id", ""))
-    st.query_params["step"] = "detail"
-    st.query_params["entry_id"] = quote_plus(str(row.get("id", "")))
 
     st.text_area("Raw Text", value=str(row.get("raw_text", "")), height=220, disabled=True)
 
@@ -730,7 +995,7 @@ def _entry_detail_screen() -> None:
         else:
             edited[field.name] = st.text_input(field.name, value="" if current_value is None else str(current_value), key=key)
 
-    controls = st.columns(2)
+    controls = st.columns([6, 2], vertical_alignment="bottom")
     if controls[0].button("Save"):
         for idx, existing in enumerate(rows):
             if str(existing.get("id", "")) == str(row.get("id", "")):
@@ -740,21 +1005,27 @@ def _entry_detail_screen() -> None:
                 st.success("Saved edits")
                 break
 
-    if controls[1].button("<- Back to Results"):
-        if "step" in st.query_params:
-            del st.query_params["step"]
-        if "entry_id" in st.query_params:
-            del st.query_params["entry_id"]
-        _set_step(STEP_RESULTS)
+    hide_align = controls[1].columns([1, 1], vertical_alignment="bottom")
+    if hide_align[1].button("Hide Entry Detail"):
+        st.session_state["show_entry_detail"] = False
         st.rerun()
 
 
 def main() -> None:
     st.set_page_config(page_title="Data Extraction Pipeline", layout="wide")
+    st.markdown(
+        """
+        <style>
+        .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
+        div[data-testid="stRadio"] [role="radiogroup"] {justify-content: flex-start;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.title("Data Extraction Pipeline")
-    st.caption("Guided workflow: Upload -> Schema -> Processing -> Results -> Entry Detail")
 
     _init_state()
+    _render_sidebar()
 
     # Allow row-level links from Results table to open Entry Detail.
     qp_step = st.query_params.get("step")
@@ -763,7 +1034,13 @@ def main() -> None:
         st.session_state["selected_row_id"] = unquote_plus(str(qp_entry))
         st.session_state["step"] = STEP_DETAIL
 
-    _progress_header()
+    nav_step = st.query_params.get("nav")
+    if nav_step:
+        st.query_params.pop("nav", None)
+        if nav_step in {info.key for info in _step_order()}:
+            _set_step(str(nav_step))
+
+    _render_stepper()
 
     step = st.session_state["step"]
     if step == STEP_UPLOAD:
@@ -772,10 +1049,10 @@ def main() -> None:
         _schema_screen()
     elif step == STEP_PROCESSING:
         _processing_screen()
-    elif step == STEP_RESULTS:
-        _results_screen()
     else:
-        _entry_detail_screen()
+        if step == STEP_DETAIL:
+            st.session_state["show_entry_detail"] = True
+        _results_screen()
 
 
 if __name__ == "__main__":
