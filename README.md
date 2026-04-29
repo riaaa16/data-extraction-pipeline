@@ -2,41 +2,66 @@
 
 AI-powered pipeline for converting unstructured UX research text (PDF/TXT/DOCX) into structured rows.
 
-Current implementation covers:
-- Sprint 1 (complete): extraction + segmentation
-- Sprint 2 (complete): local LLM structured extraction via Ollama
-- Sprint 3 (complete): validation, retry repair loop, and confidence scoring
-- Sprint 4 (active): guided Streamlit workflow and CSV export
+Completed sprints:
+- Sprint 1: extraction + segmentation
+- Sprint 2: local LLM structured extraction via Ollama
+- Sprint 3: validation, retry repair loop, and confidence scoring
+- Sprint 4: guided Streamlit workflow and CSV export
+- Sprint 5: insights screen (keyword/theme aggregation and field breakdowns)
 
 ## What This Project Does
 
 1. Reads `.txt`, `.docx`, and text-based `.pdf` files.
 2. Segments raw text into entries (`id`, `raw_text`).
-3. Optionally uses a local LLM (Ollama) to map entries into a user-defined schema.
-4. Validates extracted rows, retries invalid outputs with repair instructions, and adds per-row confidence.
+3. Uses a local LLM (Ollama) to map entries into a user-defined JSON schema.
+4. Validates extracted rows, retries invalid outputs with repair instructions, and adds per-row confidence scores.
+5. Aggregates the results into keyword, theme, and field-breakdown insights.
 
 High-level flow:
 
-`PDF/TXT/DOCX -> Text Extraction -> Entry Segmentation -> LLM Structured Extraction -> Validation/Retry -> Confidence`
+```
+PDF/TXT/DOCX
+  → Text Extraction
+  → Entry Segmentation (deterministic / regex / LLM)
+  → LLM Structured Extraction
+  → Validation & Retry
+  → Confidence Scoring
+  → Insights
+```
 
 ## Tech Stack
 
-- Python
+- Python 3.12
+- Streamlit ≥ 1.43 (UI)
 - PyMuPDF (PDF extraction)
-- Ollama (local model inference)
+- python-docx (DOCX extraction)
+- Ollama (local model inference — no external API required)
+- Altair (charts in the Insights screen)
 
 ## Project Structure
 
-- `depipeline/` - core pipeline package
-- `fixtures/` - sample data and schema fixtures
-- `scripts/` - helper scripts (for example, sample fixture generator)
-- `tests/` - regression tests
-- `sprints/` - sprint plans and status
-- `docs/` - project and UI specs
+```
+depipeline/        core pipeline package
+  extraction.py    file → text
+  segmentation.py  text → entries (deterministic / regex / LLM boundaries)
+  schema.py        schema field definitions
+  ollama_client.py HTTP client for Ollama
+  structured_extraction.py  LLM extraction + confidence
+  validation.py    field validation + retry
+  insights.py      keyword / theme / field-breakdown aggregation
+  cli.py           argparse CLI
+app.py             Streamlit UI (single-file)
+.streamlit/        Streamlit theme configuration
+fixtures/          sample inputs and schema files
+scripts/           fixture generator + workflow smoke test
+tests/             regression tests
+docs/              project spec and UI spec
+sprints/           sprint plans
+```
 
 ## Quick Start
 
-## 1) Install dependencies
+### 1) Install dependencies
 
 Windows (PowerShell):
 
@@ -54,27 +79,41 @@ source .venv/Scripts/activate
 pip install -r requirements.txt
 ```
 
-## 2) Optional: prepare local LLM
+### 2) Optional: pull a local model
 
 ```bash
 ollama pull llama3.2:3b
 ```
 
-## Run the Pipeline
+## Run the Streamlit App
 
-## A) Sprint 1 mode (extract + segment only)
+```bash
+streamlit run app.py
+```
+
+The guided UI walks through five steps:
+
+| Step | What happens |
+|------|-------------|
+| **Upload** | Add `.txt`, `.pdf`, or `.docx` files |
+| **Schema** | Define extraction fields, choose segmentation mode, save/load schema presets |
+| **Processing** | Per-stage progress bars: extraction → segmentation → LLM → validation |
+| **Results** | Summary metric cards, filterable results table, CSV export, Entry Detail modal |
+| **Insights** | Keyword frequency, theme aggregation, and field-breakdown bar charts |
+
+### Entry Detail modal
+
+Click **Open Entry Detail →** in the Results table to open an inline modal showing the raw source text alongside all extracted fields. Use **‹ Prev** / **Next ›** to step through entries without closing the modal.
+
+## Run the Pipeline via CLI
+
+### Extract and segment only
 
 ```bash
 python -m depipeline fixtures/core/sample.txt fixtures/core/sample.pdf --sample 3
 ```
 
-Example DOCX run:
-
-```bash
-python -m depipeline path/to/notes.docx --sample 3
-```
-
-## B) Sprint 2 mode (schema-driven structured extraction)
+### Schema-driven structured extraction
 
 ```bash
 python -m depipeline \
@@ -82,35 +121,15 @@ python -m depipeline \
   --schema-file fixtures/schemas/schema.typed.sample.json \
   --ollama-model llama3.2:3b \
   --validation-max-retries 2 \
-  --json-out .depipeline_logs/sprint2_output.json \
+  --json-out .depipeline_logs/output.json \
   --sample 3
 ```
-
-## C) Run against generated diary PDFs (bash)
-
-```bash
-python -m depipeline fixtures/generated/diary/*.pdf \
-  --schema-file fixtures/schemas/schema.typed.sample.json \
-  --ollama-model llama3.2:3b \
-  --validation-max-retries 2 \
-  --sample 3
-```
-
-## Run the Streamlit App (Sprint 4)
-
-```bash
-streamlit run app.py
-```
-
-The UI flow is:
-
-`Upload -> Schema -> Processing -> Results -> Entry Detail`
 
 ## Common Issues
 
-### 1) `sample.txt` or `sample.pdf` not found
+### `sample.txt` or `sample.pdf` not found
 
-If you see a file-not-found error for `sample.txt`/`sample.pdf`, use the fixture paths under `fixtures/core/` and run from the repository root:
+Run from the repository root and use the `fixtures/core/` paths explicitly:
 
 ```bash
 python -m depipeline fixtures/core/sample.txt fixtures/core/sample.pdf \
@@ -120,25 +139,29 @@ python -m depipeline fixtures/core/sample.txt fixtures/core/sample.pdf \
   --sample 2
 ```
 
-### 2) Unable to reach Ollama at `localhost:11434`
+### Unable to reach Ollama at `localhost:11434`
 
-Start Ollama in a separate terminal before running schema-driven extraction:
+Start Ollama in a separate terminal:
 
 ```bash
 ollama serve
 ```
 
-Then rerun your pipeline command.
+Then retry. In the Streamlit app, use **Test connection** in the Ollama sidebar expander to verify before running Processing.
 
-## Regression Tests
+## Tests
 
 ```bash
 python -m unittest tests/test_extraction.py tests/test_structured_extraction.py tests/test_validation_layer.py -v
 ```
 
-## Workflow Smoke Test Script
+All tests (including segmentation and insights):
 
-This script validates the guided workflow logic (extract -> segment -> structured extraction -> CSV export) without requiring a browser session:
+```bash
+python -m unittest discover -s tests -v
+```
+
+Workflow smoke test (no browser required):
 
 ```bash
 python scripts/test_workflow.py
@@ -146,19 +169,9 @@ python scripts/test_workflow.py
 
 ## Fixtures
 
-See `fixtures/README.md` for fixture organization and additional examples.
-
-## Current Sprint Status
-
-See `sprints/sprints.md`.
-
-At the moment:
-- Sprint 01: complete
-- Sprint 02: complete
-- Sprint 03: complete
-- Sprint 04: active
+See `fixtures/README.md` for fixture organization and examples.
 
 ## Current Limitations
 
-- OCR is not implemented yet (scanned image-only PDFs are flagged as unsupported in current pipeline mode).
-- Insights dashboard is planned for Sprint 5.
+- OCR is not implemented (scanned image-only PDFs are flagged as unsupported).
+- Insights themes use simple stem-based aggregation — semantic clustering is out of scope until Sprint 6.

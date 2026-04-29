@@ -1,23 +1,33 @@
-# Streamlit UI Specs — Sprint 5 (Redesign)
+# Streamlit UI Specs — Sprint 5
 
 ## Overview & Design Philosophy
 
-The redesigned app uses a single-page, sidebar-driven layout rather than a sequence of full-page screens. The left sidebar holds persistent navigation and global config (Ollama settings). The main content area renders the active step. A sticky progress stepper at the top of the main area always shows where the user is and what is complete.
+The app uses a single-page, sidebar-driven layout. The left sidebar holds persistent navigation and global Ollama config. The main content area renders the active step. A progress stepper at the top of the main area always shows where the user is and what is complete.
 
-The primary design goals are:
+Primary design goals:
 - **Reduce cognitive load**: expose only what is needed for the current step.
-- **Clear progress feedback**: every async operation has a labelled, per-task progress bar — not a single global bar.
-- **Recoverability**: users can jump back to any completed step without losing state.
-- **Minimal visual noise**: use `st.container` cards, subtle dividers, and muted secondary text rather than raw unstyled widgets stacked top-to-bottom.
+- **Clear progress feedback**: per-stage labelled progress bars during processing.
+- **Recoverability**: jump back to any completed step without losing state.
+- **Minimal visual noise**: `st.container` cards, subtle dividers, muted secondary text.
 
-Colour palette (implement via `st.markdown` injected CSS or a `config.toml` theme):
-- Background: `#F8F9FA`
-- Card/container surface: `#FFFFFF`
-- Primary accent: `#4F6CF7` (indigo)
-- Success: `#22C55E`
-- Warning: `#F59E0B`
-- Error: `#EF4444`
-- Muted text: `#6B7280`
+### Colour palette
+
+Set via `.streamlit/config.toml` (applies automatically to all Streamlit components):
+
+| Role | Value |
+|------|-------|
+| Background | `#F8F9FA` |
+| Card / container surface | `#FFFFFF` |
+| Primary accent | `#4F6CF7` (indigo) |
+| Success | `#22C55E` |
+| Warning | `#F59E0B` |
+| Error | `#EF4444` |
+| Muted text | `#6B7280` |
+
+Additional styles injected via `st.markdown` in `main()`:
+- Monospace font (`JetBrains Mono`, Fira Mono, Consolas) applied to all `textarea` elements.
+- Left-aligned sidebar nav buttons.
+- Radio group options left-aligned.
 
 ---
 
@@ -27,68 +37,59 @@ Colour palette (implement via `st.markdown` injected CSS or a `config.toml` them
 ┌──────────────────┬──────────────────────────────────────────────┐
 │   SIDEBAR        │  MAIN CONTENT AREA                           │
 │                  │                                              │
-│  App logo/title  │  ── Step Stepper (sticky) ──────────────    │
-│                  │   1 Upload  2 Schema  3 Process  4 Results   │
+│  App logo/title  │  ── Step Stepper ───────────────────────    │
+│                  │   Upload  Schema  Process  Results  Insights  │
 │  ── Navigation   │                                              │
-│  1 Upload    ●   │  <active step content>                       │
-│  2 Schema    ○   │                                              │
-│  3 Process   ○   │                                              │
-│  4 Results   ○   │                                              │
+│  Upload      ●   │  <active step content>                       │
+│  Schema      ○   │                                              │
+│  Process     ○   │                                              │
+│  Results     ○   │                                              │
+│  Insights    ○   │                                              │
 │                  │                                              │
 │  ── Ollama ────  │                                              │
 │  Model           │                                              │
 │  Base URL        │                                              │
 │  Timeout         │                                              │
 │  Retries         │                                              │
+│  [Test conn]     │                                              │
 └──────────────────┴──────────────────────────────────────────────┘
 ```
 
 ### Sidebar — always visible
 
 **App header**
-- Logo mark (small indigo square icon) + text "DE Pipeline" in 18px semibold.
-- Subtitle: "Data Extraction Pipeline" in muted 12px.
+- Small indigo square icon + "DE Pipeline" (semibold) + "Data Extraction Pipeline" subtitle (muted 12px).
 
 **Navigation**
-- Five clickable step labels: Upload, Schema, Process, Results, Entry Detail.
-- Each shows a status icon:
-  - Grey circle = not yet reached.
-  - Indigo filled circle = active.
-  - Green checkmark = completed.
-- Clicking a completed step navigates to it without resetting state.
-- Clicking a future step is disabled (greyed out, cursor: not-allowed).
+- Five `st.button` labels: Upload, Schema, Process, Results, Insights.
+- Status icon prefix: `✅` completed · `●` active · `○` future.
+- Future steps are disabled (`disabled=True`).
+- Clicking a completed or active step navigates without resetting state.
 
-**Ollama Configuration** (collapsed `st.expander` by default, expands on first visit)
-- `st.text_input` — Model name (default: `llama3.2:3b`)
+**Ollama Configuration** (`st.expander("Ollama", expanded=False)`)
+- `st.text_input` — Model (default: `llama3.2:3b`)
 - `st.text_input` — Base URL (default: `http://localhost:11434`)
 - `st.number_input` — Timeout in minutes (default: 3, min: 1, max: 30)
 - `st.number_input` — Validation max retries (default: 2, min: 0, max: 10)
-- `st.button("Test connection")` — runs a lightweight ping to the Ollama base URL and shows `st.success` / `st.error` inline below the button.
-
-Moving Ollama config to the sidebar means it is accessible from every step without cluttering the Schema screen.
+- `st.button("Test connection")` — lightweight GET to `/api/tags`; shows `st.success` / `st.error` inline.
 
 ---
 
 ## Step Stepper Component
 
-Render at the top of the main area on every screen. Implemented as a single `st.markdown` block with injected HTML/CSS or as a custom component.
+HTML/CSS block rendered at the top of the main area on every screen via `st.markdown(..., unsafe_allow_html=True)`.
 
-```
-  ●──────────○──────────○──────────○
-Upload    Schema    Process    Results
-```
-
-- Completed steps: filled indigo circle + indigo connecting line.
-- Active step: filled indigo circle with white dot inside + bold label.
-- Future steps: empty grey circle + grey line + muted label.
-- The stepper is read-only; navigation is done from the sidebar.
+- Completed steps: green dot.
+- Active step: indigo dot.
+- Future steps: grey dot.
+- Completed/active steps render as `<a href='?nav=<key>'>` links for direct navigation.
 
 ---
 
 ## Screen 1 — Upload
 
 ### Purpose
-Collect one or more files (.txt, .pdf, .docx) to be processed.
+Collect one or more files (.txt, .pdf, .docx) to process.
 
 ### Layout
 
@@ -97,18 +98,12 @@ Collect one or more files (.txt, .pdf, .docx) to be processed.
 │  Upload Files                                   │
 │  Add the documents you want to extract from.   │
 │                                                 │
-│  ┌─────────────────────────────────────────┐   │
-│  │                                         │   │
-│  │   Drag & drop files here                │   │
-│  │   or  [ Browse files ]                  │   │
-│  │   .txt  .pdf  .docx  · max 200 MB each  │   │
-│  │                                         │   │
-│  └─────────────────────────────────────────┘   │
+│  [ Drag & drop files here (file uploader) ]    │
 │                                                 │
-│  Uploaded files                                 │
+│  Uploaded files  (2 files · 204 KB total)       │
 │  ┌──────────────────────────────────────────┐  │
-│  │ 📄 interview_batch_1.pdf       120 KB  ✕ │  │
-│  │ 📄 responses_march.docx         84 KB  ✕ │  │
+│  │ 📄 interview_batch_1.pdf    120 KB    ✕  │  │
+│  │ 📄 responses_march.docx      84 KB    ✕  │  │
 │  └──────────────────────────────────────────┘  │
 │                                                 │
 │                      [ Continue → Schema ]      │
@@ -117,25 +112,17 @@ Collect one or more files (.txt, .pdf, .docx) to be processed.
 
 ### Components
 
-**File uploader**
-- `st.file_uploader(accept_multiple_files=True, type=["txt","pdf","docx"])`
-- Wrap in a styled `st.container` with a dashed border (inject CSS via `st.markdown`).
-- Helper text below the drop zone: "Accepts .txt, .pdf, .docx — up to 200 MB per file."
+**File uploader** — `st.file_uploader(accept_multiple_files=True, type=["txt","pdf","docx"])`.
 
 **Uploaded file list**
-- Render as a bordered card below the uploader, only visible when at least one file is uploaded.
-- Each row: file-type emoji icon + filename (truncated at 40 chars with ellipsis if needed) + size in KB/MB + a remove button (✕).
-- Remove button calls `st.session_state.uploaded_files.pop(index)` and reruns.
-- Show a muted count line above the list: "2 files · 204 KB total."
+- Each row: `st.columns([6, 2, 1], vertical_alignment="center")` — filename + muted size caption + ✕ remove button.
+- Muted count line above: "N files · X KB total."
+- Only shown when at least one file is uploaded; otherwise `st.info` prompt.
 
-**Continue button**
-- `st.button("Continue → Schema", type="primary")`
-- Disabled (`disabled=True`) when `len(st.session_state.uploaded_files) == 0`.
-- Positioned right-aligned using `st.columns([6,2])`.
+**Continue button** — `st.button("Continue → Schema", type="primary", use_container_width=True)`, right-aligned via `st.columns([6, 2])`, disabled when no files are uploaded.
 
 ### Session State
-- `st.session_state.uploaded_files`: list of dicts `{name, bytes, size_bytes, type}`.
-- Files persist across all subsequent steps.
+- `uploaded_files`: list of `{name, bytes, size}` dicts — populated on first upload, persists across all steps.
 
 ---
 
@@ -144,187 +131,84 @@ Collect one or more files (.txt, .pdf, .docx) to be processed.
 ### Purpose
 Define extraction fields, choose segmentation mode, and save/load schema presets.
 
-### Layout
-
-```
-┌──────────────────────────────────────────────────────┐
-│  Schema Builder                                      │
-│  Define the fields you want to extract from each    │
-│  entry.                                             │
-│                                                      │
-│  ── Fields ──────────────────────────────────────── │
-│                                                      │
-│  ┌──────────────────────────────────────────────┐   │
-│  │ Field 1                              [Remove] │   │
-│  │ Name [participant_name]  Type [string    ▾]  │   │
-│  │ Description [Full name of the participant  ] │   │
-│  └──────────────────────────────────────────────┘   │
-│                                                      │
-│  ┌──────────────────────────────────────────────┐   │
-│  │ Field 2                              [Remove] │   │
-│  │ Name [sentiment]         Type [enum      ▾]  │   │
-│  │ Description [Overall sentiment of entry    ] │   │
-│  │ Enum values  [positive] [neutral] [negative] │   │
-│  │              [ + add value ]                 │   │
-│  └──────────────────────────────────────────────┘   │
-│                                                      │
-│  [ + Add Field ]                                     │
-│                                                      │
-│  ── Saved Schemas ───────────────────────────────── │
-│  Name [my_schema          ] [💾 Save]               │
-│  Load [schema_01          ▾] [📂 Load]              │
-│                                                      │
-│  ── Entry Separation ───────────────────────────── │
-│  Mode  ● Deterministic  ○ Regex  ○ LLM             │
-│                                                      │
-│  <mode-specific controls — see below>               │
-│                                                      │
-│  [ ← Back ]                    [ Run Processing → ] │
-└──────────────────────────────────────────────────────┘
-```
-
 ### Components
 
-**Field cards**
-- Each field is rendered inside `st.container` with a light grey border.
-- Header row: bold "Field N" label on the left, `st.button("Remove", key=f"remove_{i}")` on the right.
-- Body: two columns — left `st.text_input("Name")`, right `st.selectbox("Type", ["string","integer","float","boolean","enum"])`.
-- Full-width `st.text_input("Description")` below.
-- If `type == "enum"`: render an additional row showing current enum values as removable tags + an inline `st.text_input` + `st.button("Add")` to add new values.
-- Enum tag style: small indigo pill with an ✕ button.
+**Field cards** — each field rendered inside `st.container(border=True)` with a 4-column row:
+- `Name` (text input) · `Type` (selectbox: string / number / boolean / enum) · `Description` (text input) · `Remove` button.
+- When `type == "enum"`: full-width `st.text_input("Enum values (comma-separated)")` rendered below.
 
-**Add Field button**
-- `st.button("+ Add Field")` appends a blank field to `st.session_state.schema_fields`.
-- Always visible below the field list.
+**Add Field button** — `st.button("+ Add Field")`, always visible below the field list.
 
-**Saved Schemas panel** (inside `st.expander("Saved Schemas", expanded=False)`)
-- Save row: `st.text_input("Schema name")` + `st.button("💾 Save")` — writes JSON to `.depipeline_logs/saved_schemas/<name>.json`.
-- Load row: `st.selectbox` of discovered schema files + `st.button("📂 Load")` — populates `st.session_state.schema_fields`.
-- Show `st.success("Saved.")` / `st.success("Loaded.")` inline for 2 seconds after action.
+**Saved Schemas** (`st.expander("Saved Schemas", expanded=False)`)
+- Save: name input + 💾 Save button → writes JSON to `.depipeline_logs/saved_schemas/<name>.json`.
+- Load: selectbox of saved schema files + 📂 Load button → populates `schema_fields` and reruns.
 
-**Entry Separation panel** (inside `st.expander("Entry Separation", expanded=True)`)
-- `st.radio("Mode", ["Deterministic", "Regex", "LLM"])` — horizontal layout.
+**Entry Separation** (`st.expander("Entry Separation", expanded=True)`)
+- `st.radio("Mode", ["Deterministic", "Regex", "LLM"], horizontal=True)`.
+- *Deterministic*: `st.info` message only.
+- *Regex*: `st.text_area` (one pattern per line, monospace) + preset selectbox + Apply button + LLM Regex Helper sub-expander.
+- *LLM*: dataset description `st.text_area` + info box.
 
-  *Deterministic mode*: no additional controls. Show info box: "Entries will be split using built-in heuristics. No configuration needed."
-
-  *Regex mode*:
-  - `st.text_area("Boundary patterns", height=100)` — one regex per line, monospace font via CSS.
-  - Presets selectbox: "Interview — speakers", "Interview — timestamps", "Interview — speakers + timestamps" + `st.button("Apply preset")`.
-  - LLM Regex Helper sub-expander:
-    - `st.text_input("Sample heading")` + `st.button("Suggest regex")`.
-    - On click: calls Ollama with the sample heading, streams result into `st.code` block.
-    - `st.button("Use this pattern")` appends the suggestion to the patterns text area.
-
-  *LLM mode*:
-  - `st.text_area("Dataset description (optional)", height=80, placeholder="e.g. Interview transcripts, one participant per entry…")`.
-  - Info box: "The LLM will identify entry boundaries and return start/end line ranges. Errors will halt processing with an actionable message."
-
-**Navigation buttons**
-- Left: `st.button("← Back")` returns to Upload.
-- Right: `st.button("Run Processing →", type="primary")` — disabled if `len(schema_fields) == 0`. On click, validates that all fields have a name, then navigates to Process.
-
-### Validation
-- On "Run Processing →": check each field has a non-empty name. If not, show `st.error("All fields must have a name.")` and do not navigate.
-- Enum fields must have at least one value; show `st.warning` otherwise (warn, do not block).
-
-### Session State
-- `st.session_state.schema_fields`: list of dicts `{name, type, description, enum_values}`.
-- `st.session_state.separation_mode`: `"deterministic"` | `"regex"` | `"llm"`.
-- `st.session_state.regex_patterns`: list of strings.
-- `st.session_state.dataset_description`: string.
+**Navigation**
+- Left: `st.button("← Back")` → Upload.
+- Right: `st.button("Run Processing →", type="primary")` → validates fields, sets `schema_ready = True`, navigates to Processing.
 
 ---
 
 ## Screen 3 — Processing
 
 ### Purpose
-Run the full pipeline and give the user fine-grained progress feedback for each stage.
+Run the full pipeline with per-stage progress feedback.
 
-### Layout
+### Layout (during run)
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Processing                                          │
 │  Running your pipeline. This may take a few minutes.│
 │                                                      │
-│  ── Stage Progress ──────────────────────────────── │
+│  Stage Progress                                      │
+│  1 — Text Extraction    [████████████] 100%         │
+│  2 — Segmentation       [████████░░░░]  67%         │
+│  3 — LLM Extraction     [░░░░░░░░░░░░]   0%         │
+│  4 — Validation         [░░░░░░░░░░░░]   0%         │
 │                                                      │
-│  1  Text Extraction          ████████████  100%  ✓  │
-│     3 files extracted · 0 warnings                  │
-│                                                      │
-│  2  Segmentation             ████████░░░░   67%  ⟳  │
-│     Splitting file2.pdf…                            │
-│                                                      │
-│  3  LLM Extraction           ░░░░░░░░░░░░    0%  –  │
-│                                                      │
-│  4  Validation               ░░░░░░░░░░░░    0%  –  │
-│                                                      │
-│  ── Live Metrics ───────────────────────────────── │
-│  Files processed  2 / 3                             │
-│  Entries found    14                                │
-│  Retried          1                                 │
-│  Elapsed          0:43                              │
-│                                                      │
-│  ── Warnings ───────────────────────────────────── │
-│  ⚠ file1.pdf: page 4 had no extractable text       │
-│                                                      │
-│  [ ← Back to Schema ]        [ Continue → Results ] │
+│  Files: 2/3 | Entries: 14 | LLM: 4/14              │
 └──────────────────────────────────────────────────────┘
+```
+
+### Layout (after completion)
+
+```
+│  ✅ Processing complete.                             │
+│  ┌────────┐ ┌────────────┐ ┌────────┐ ┌────────┐   │
+│  │ Total  │ │First-pass  │ │Retried │ │ Failed │   │
+│  │  120   │ │   110      │ │   10   │ │    0   │   │
+│  └────────┘ └────────────┘ └────────┘ └────────┘   │
+│                                                      │
+│  [ ← Back to Schema ]       [ Continue → Results ]  │
 ```
 
 ### Components
 
-**Stage progress bars**
-Each of the four pipeline stages gets its own labelled row:
+**Stage progress bars** — four sequentially labelled `st.progress` bars: `1 — Text Extraction`, `2 — Segmentation`, `3 — LLM Extraction`, `4 — Validation`. Updated via a `progress_callback` passed to `extract_structured_batch_with_validation`.
 
-```
-Stage name     [progress bar]     XX%     [status icon]
-Sub-label (current file / step)
-```
+**Live metrics** — `st.empty()` placeholder updated with file/entry/LLM counts during the run.
 
-- Implement as: `st.empty()` placeholder per stage, updated via `placeholder.markdown(...)` during the run.
-- Status icons:
-  - `–` grey dash = not started.
-  - `⟳` spinning indicator (use `st.spinner` context or animated Unicode) = in progress.
-  - `✓` green checkmark = complete.
-  - `✕` red cross = failed.
-- Progress values come from callbacks/generators yielded by the backend processing functions.
-- Each bar uses `st.progress(value)` inside its placeholder.
+**Completion metrics** — `st.columns(4)` with `st.metric` for Total, First-pass valid, Retried, Failed.
 
-**Stage sub-labels**
-- Text line below each bar in muted colour showing the current item being processed (e.g. "Extracting: interview_batch_1.pdf (2 of 3)").
-- Updated each time a new file/entry starts.
+**Error handling** — fatal `DepipelineError` shown via `st.error`; if Ollama is unreachable a "Restart process" button appears to clear run state.
 
-**Warnings panel**
-- Only shown if `len(warnings) > 0`.
-- Each warning rendered as `st.warning(text)` inside a scrollable container (max-height 120px via CSS).
-- Count badge above the panel: "3 warnings".
-
-**Live Metrics panel**
-- Four `st.metric` widgets in a `st.columns(4)` row.
-- Updated in real time during the run.
-- Metrics: Files Processed, Entries Found, Retried, Elapsed.
-
-**Error handling**
-- If any stage raises a fatal error (especially LLM segmentation): stop the run, render `st.error(actionable_message)` above the stage bars, and enable the Back button. The Continue button remains disabled.
-- Non-fatal warnings are collected and shown in the Warnings panel without stopping the run.
-
-**Navigation buttons**
-- "← Back to Schema": always enabled, returns to Schema without clearing uploaded files or schema.
-- "Continue → Results": disabled until processing completes successfully. On success, auto-scroll to this button (use `st.balloons()` optionally) and enable it.
-
-### Session State
-- `st.session_state.processing_complete`: bool.
-- `st.session_state.results`: list of entry dicts.
-- `st.session_state.warnings`: list of warning strings.
-- `st.session_state.processing_metrics`: dict `{files_processed, total_files, entries_found, retried, elapsed_seconds}`.
+**Navigation**
+- `st.button("← Back to Schema")` — always enabled.
+- `st.button("Continue → Results", type="primary")` — disabled if `pipeline_error` is set.
 
 ---
 
 ## Screen 4 — Results
 
 ### Purpose
-Review all extracted entries, export to CSV, and select an entry to inspect or edit.
+Review extracted entries, filter, export to CSV, and inspect individual entries.
 
 ### Layout
 
@@ -332,175 +216,166 @@ Review all extracted entries, export to CSV, and select an entry to inspect or e
 ┌──────────────────────────────────────────────────────┐
 │  Results                                             │
 │                                                      │
-│  ── Summary ─────────────────────────────────────── │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────┐│
-│  │ Total    │  │First-pass│  │ Retried  │  │Failed││
-│  │   120    │  │   110    │  │    10    │  │   0  ││
-│  └──────────┘  └──────────┘  └──────────┘  └──────┘│
+│  ┌────────┐ ┌────────────┐ ┌────────┐ ┌────────┐   │
+│  │ Total  │ │First-pass  │ │Retried │ │ Failed │   │
+│  │  120   │ │   110      │ │   10   │ │    0   │   │
+│  └────────┘ └────────────┘ └────────┘ └────────┘   │
 │                                                      │
-│  ┌─ Warnings (2) ──────────────────────────┐        │
-│  │ ⚠ file1.pdf p.4: no extractable text   │        │
-│  │ ⚠ entry 007: low confidence (0.41)     │        │
-│  └─────────────────────────────────────────┘        │
+│  ▸ Warnings (2)  (collapsed expander)               │
 │                                                      │
-│  ── Results Table ───────────────────────────────── │
-│  [ 🔍 Filter...              ]  [ 📥 Export CSV ]   │
+│  [ 🔍 Type to filter by any field…         ]        │
+│  Showing 25 of 120 rows · select a row then click…  │
 │                                                      │
 │  ID  │ participant_name │ sentiment │ confidence     │
-│  001 │ Alex             │ negative  │ 0.82       [→] │
-│  002 │ Sam              │ neutral   │ 0.77       [→] │
-│  003 │ Jordan           │ positive  │ 0.91       [→] │
+│  001 │ Alex             │ negative  │ 0.82           │
+│  002 │ Sam              │ neutral   │ 0.77           │
 │                                                      │
-│  Showing 1–25 of 120    [ < Prev ]  [ Next > ]      │
+│  [ 📥 Export CSV ]                                  │
 │                                                      │
-│  ── Open Entry ──────────────────────────────────── │
-│  Select entry  [ 001 ▾ ]   [ Open Entry Detail → ]  │
+│  Select entry [ 001 ▾ ]  [ Open Entry Detail → ]   │
 │                                                      │
-│  [ ← Back to Processing ]                           │
+│  [ ← Back to Processing ]   [ Continue → Insights ] │
 └──────────────────────────────────────────────────────┘
 ```
 
 ### Components
 
-**Summary metrics**
-- `st.columns(4)` row of `st.metric` cards: Total, First-Pass Valid, Retried, Failed.
-- Failed count in red if `> 0`, otherwise default colour.
+**Summary metrics** — `st.columns(4)` with `st.metric`: Total entries, First-pass valid, Retried, Failed. Failed metric shows a delta label if `> 0`.
 
-**Warnings panel**
-- Collapsed `st.expander(f"Warnings ({len(warnings)})", expanded=False)`.
-- Each warning as a `st.warning` inside. Only render if `len(warnings) > 0`.
+**Warnings** — `st.expander(f"Warnings ({n})", expanded=False)`, only rendered when warnings exist.
 
-**Filter bar**
-- `st.text_input("🔍 Filter…", placeholder="Type to filter by any field")` above the table.
-- Filters rows client-side (Python rerun) by checking if the query string appears in any column value (case-insensitive).
+**Filter bar** — `st.text_input` (collapsed label, placeholder "🔍 Type to filter by any field…"). Filters `preview_rows` client-side (case-insensitive match against any column value).
 
-**Results table**
-- Render using `st.dataframe` with `use_container_width=True`.
-- Columns: id + all schema field names + confidence. Confidence column formatted to 2 decimal places.
-- `st.dataframe` selection mode: `selection_mode="single-row"` (Streamlit ≥ 1.35). Selecting a row sets `st.session_state.selected_entry_id`.
-- Each row also has an inline "→" open button (rendered via `st.data_editor` with a button column as fallback for older Streamlit versions).
-- Pagination: show 25 rows per page. Previous/Next buttons update `st.session_state.results_page`.
+**Results table** — `st.dataframe(use_container_width=True, on_select="rerun", selection_mode="single-row")`. Selecting a row sets `table_selection_id`; this takes precedence over the selectbox.
 
-**Selectbox fallback**
-- `st.selectbox("Select entry", options=[e["id"] for e in results])` below the table.
-- Always synced with table row selection — clicking a table row also updates the selectbox value.
+**Export CSV** — `st.download_button("📥 Export CSV")`, includes `id + raw_text + schema fields + confidence`.
 
-**Export CSV button**
-- `st.download_button("📥 Export CSV", data=csv_bytes, file_name="results.csv", mime="text/csv")`.
-- CSV includes all schema fields + confidence + id.
-- Any edits made in Entry Detail are reflected in the export.
+**Entry selector + open** — `st.selectbox("Select entry")` synced with table selection; `st.button("Open Entry Detail →")` sets `show_entry_detail = True` and reruns.
 
-**Open Entry Detail button**
-- `st.button("Open Entry Detail →", type="primary")` — disabled if no entry selected.
-- Navigates to Entry Detail with `st.session_state.selected_entry_id` set.
+**Navigation**
+- `st.button("← Back to Processing")`
+- `st.button("Continue → Insights", type="primary")`
 
 ### Session State
-- `st.session_state.selected_entry_id`: str or None.
-- `st.session_state.results_page`: int (default 0).
-- `st.session_state.results_filter`: str.
+- `results_filter`: str — current filter query.
+- `selected_row_id`: str — currently selected entry ID.
+- `show_entry_detail`: bool — controls whether the Entry Detail dialog is open.
 
 ---
 
-## Screen 5 — Entry Detail
+## Screen 4b — Entry Detail (Modal Dialog)
 
-### Purpose
-Inspect the raw source text for a single entry and edit its structured fields.
+Rendered as `@st.dialog("Entry Detail", width="large")` called at the bottom of the Results screen when `show_entry_detail` is True.
 
 ### Layout
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  Entry Detail — #001                                 │
+│  Entry Detail                                    [✕] │
 │                                                      │
-│  ── Raw Text ────────────────────────────────────── │
+│  Entry 3 of 120          [ ‹ Prev ]  [ Next › ]     │
+│                                                      │
+│  Confidence  0.82                                    │
+│                                                      │
+│  Raw Text                                            │
 │  ┌──────────────────────────────────────────────┐   │
 │  │ Participant: Alex                            │   │
-│  │ Date: 2026-04-01                             │   │
-│  │ Sentiment: I felt very frustrated today…     │   │
 │  │ …                                            │   │
 │  └──────────────────────────────────────────────┘   │
 │                                                      │
-│  ── Extracted Fields ────────────────────────────── │
+│  participant_name  [ Alex        ]                   │
+│  sentiment         [ negative ▾ ]                   │
 │                                                      │
-│  participant_name                                    │
-│  [ Alex                          ]                  │
-│                                                      │
-│  sentiment                                          │
-│  [ negative ▾ ]                                     │
-│                                                      │
-│  mentions_confusion                                  │
-│  [✓] Yes  (checkbox)                                │
-│                                                      │
-│  confidence   0.82  (read-only badge)               │
-│                                                      │
-│  [ ← Back to Results ]               [ 💾 Save ]    │
+│  ────────────────────────────────────────────────── │
+│                                   [ Close ]          │
 └──────────────────────────────────────────────────────┘
 ```
 
 ### Components
 
-**Entry header**
-- "Entry Detail — #001" as `st.subheader`.
-- Muted secondary line: filename + page/line range if available (e.g. "Source: interview_batch_1.pdf · lines 14–38").
+**Navigation row** — `st.columns([4, 1, 1])`: entry N of total caption + `‹ Prev` / `Next ›` buttons (disabled at boundaries). Clicking updates `selected_row_id` and calls `st.rerun()`.
 
-**Raw text panel**
-- `st.text_area("Raw Text", value=entry["raw_text"], height=200, disabled=True)`.
-- Monospace font injected via CSS.
-- Wrap in a bordered `st.container`.
+**Confidence metric** — `st.metric("Confidence", f"{conf:.2f}")`, read-only.
 
-**Field editors** (type-aware)
+**Raw Text** — `st.text_area(height=180, disabled=True)` with monospace font (applied via global CSS).
+
+**Field editors** — type-aware, all `disabled=True` (read-only view):
 - `string` → `st.text_input`
-- `integer` → `st.number_input(step=1)`
-- `float` → `st.number_input(step=0.01)`
+- `number` → `st.number_input`
 - `boolean` → `st.checkbox`
-- `enum` → `st.selectbox` with enum values as options
-- Each field rendered with its schema description as `help=` tooltip.
-- Confidence displayed as a read-only `st.metric("Confidence", value=f"{conf:.2f}")` — not editable.
+- `enum` → `st.selectbox`
 
-**Save button**
-- `st.button("💾 Save", type="primary")`.
-- On click: updates the matching entry in `st.session_state.results` and shows `st.success("Saved.")` for 2 seconds.
-- Edits are immediately reflected in the Results table and CSV export.
+**Footer** — `st.divider()` + `st.button("Close")` (right-aligned). Clicking sets `show_entry_detail = False` and calls `st.rerun()` to dismiss the dialog.
 
-**Navigation**
-- `st.button("← Back to Results")` — left-aligned. Returns to Results with the same selected entry highlighted.
-- Entry navigation: small `st.columns` with "‹ Previous entry" and "Next entry ›" links at the top right of the panel, allowing the user to step through entries without returning to the Results table each time.
-
-### Session State
-- Edits written back to `st.session_state.results[index]` on Save.
+### Notes
+- The dialog uses `width="large"` from Streamlit's native `@st.dialog` decorator — no manual CSS width overrides.
+- There is no inner `st.container(height=...)` wrapper; the dialog scrolls naturally if content overflows.
 
 ---
 
-## CSS Injection Reference
+## Screen 5 — Insights
 
-Apply global styles once at app startup via `st.markdown("<style>...</style>", unsafe_allow_html=True)`:
+### Purpose
+Aggregated themes, keyword frequencies, and field-breakdown charts over the processed dataset.
+
+### Layout
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Insights                                            │
+│  Aggregated themes and simple counts…               │
+│                                                      │
+│  ┌─ Themes ──────────────────────────────────────┐  │
+│  │  [horizontal bar chart — theme vs count]      │  │
+│  └───────────────────────────────────────────────┘  │
+│                                                      │
+│  ┌─ Keywords ────────────────────────────────────┐  │
+│  │  [horizontal bar chart — keyword vs count]    │  │
+│  └───────────────────────────────────────────────┘  │
+│                                                      │
+│  Field breakdowns                                    │
+│  ┌─ sentiment ───────────────────────────────────┐  │
+│  │  [horizontal bar chart — value vs count]      │  │
+│  └───────────────────────────────────────────────┘  │
+│                                                      │
+│  [ ← Back to Results ]                              │
+└──────────────────────────────────────────────────────┘
+```
+
+### Components
+
+**Themes** — `st.container(border=True)` with an Altair horizontal bar chart (`mark_bar`, `x=count:Q`, `y=theme:N sort=-x`). Falls back to `st.caption` if no themes.
+
+**Keywords** — same pattern as Themes.
+
+**Field breakdowns** — one `st.container(border=True)` per low-cardinality schema field that has breakdown data. Only rendered if `insights.field_breakdowns` is non-empty.
+
+**Empty / no-text states** — `st.info` messages if rows are empty or `raw_text` is blank for all rows.
+
+**Navigation** — `st.button("← Back to Results")`.
+
+---
+
+## CSS Injection Reference (`main()`)
 
 ```css
-/* Card containers */
-[data-testid="stVerticalBlock"] > div.card {
-    background: #ffffff;
-    border: 1px solid #E5E7EB;
-    border-radius: 8px;
-    padding: 16px;
+/* Layout */
+.block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
+
+/* Radio groups: left-align options */
+div[data-testid="stRadio"] [role="radiogroup"] { justify-content: flex-start; }
+
+/* Monospace font for all textareas (raw text, regex patterns) */
+div[data-testid="stTextArea"] textarea {
+    font-family: "JetBrains Mono", "Fira Mono", "Consolas", monospace;
+    font-size: 13px;
 }
 
-/* Monospace text areas (raw text, regex) */
-textarea.monospace { font-family: "JetBrains Mono", monospace; font-size: 13px; }
-
-/* Enum tag pills */
-.enum-tag {
-    display: inline-flex; align-items: center; gap: 4px;
-    background: #EEF2FF; color: #4F6CF7;
-    border-radius: 999px; padding: 2px 10px; font-size: 12px;
+/* Left-align sidebar nav buttons */
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    text-align: left;
+    justify-content: flex-start;
 }
-
-/* Muted helper text */
-.muted { color: #6B7280; font-size: 12px; }
-
-/* Progress stage row */
-.stage-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.stage-label { width: 160px; font-weight: 500; }
-.stage-icon  { width: 24px; text-align: center; }
 ```
 
 ---
@@ -509,33 +384,40 @@ textarea.monospace { font-family: "JetBrains Mono", monospace; font-size: 13px; 
 
 | Key | Type | Set by | Used by |
 |-----|------|--------|---------|
+| `step` | str | Navigation | All screens |
+| `session_id` | str | Init | Processing (upload path) |
 | `uploaded_files` | list[dict] | Upload | All screens |
 | `schema_fields` | list[dict] | Schema | Process, Results |
-| `separation_mode` | str | Schema | Process |
-| `regex_patterns` | list[str] | Schema | Process |
-| `dataset_description` | str | Schema | Process |
-| `ollama_model` | str | Sidebar | Process, Schema |
-| `ollama_base_url` | str | Sidebar | Process, Schema |
-| `ollama_timeout` | int | Sidebar | Process, Schema |
-| `ollama_retries` | int | Sidebar | Process, Schema |
-| `processing_complete` | bool | Process | Results |
-| `results` | list[dict] | Process | Results, Entry Detail |
-| `warnings` | list[str] | Process | Process, Results |
-| `processing_metrics` | dict | Process | Process |
-| `selected_entry_id` | str | Results | Entry Detail |
-| `results_page` | int | Results | Results |
+| `schema_field_objects` | list[SchemaField] | Schema/Process | Process, Results, Insights |
+| `schema_ready` | bool | Schema | Processing |
+| `segmentation_mode` | str | Schema | Processing |
+| `segmentation_regex_patterns` | str | Schema | Processing |
+| `dataset_description` | str | Schema | Processing |
+| `ollama_model` | str | Sidebar | Processing, Schema |
+| `ollama_base_url` | str | Sidebar | Processing, Schema |
+| `ollama_timeout_minutes` | int | Sidebar | Processing, Schema |
+| `validation_max_retries` | int | Sidebar | Processing |
+| `processing_done` | bool | Processing | Processing |
+| `pipeline_error` | str | Processing | Processing, Insights |
+| `entries` | list[dict] | Processing | (reference) |
+| `rows` | list[dict] | Processing | Results, Insights |
+| `run_report` | dict | Processing | Processing, Results |
+| `processing_warnings` | list[str] | Processing | Results |
+| `insights` | InsightsResult | Processing | Insights |
+| `selected_row_id` | str | Results | Results, Entry Detail |
+| `show_entry_detail` | bool | Results | Results |
 | `results_filter` | str | Results | Results |
-| `current_step` | str | Navigation | Sidebar, Stepper |
+| `sample_preview_count` | int | Init | Results |
+| `regex_suggestion` | str | Schema | Schema |
 
 ---
 
-## Implementation Notes for the Coding Agent
+## Implementation Notes
 
-1. **Single-file entrypoint** — all screens live in `app.py`. Use a `render_<screen>()` function per screen, called based on `st.session_state.current_step`.
-2. **Progress bars are per-stage, not global** — the backend processing function must yield progress events as a generator or via a callback. Each stage calls `stage_placeholder.progress(value)` independently.
-3. **Never re-upload on rerun** — store file bytes in session state on first upload; do not re-read from `st.file_uploader` on every rerun.
-4. **Disable future nav items** — use `st.sidebar.button(..., disabled=True)` for steps the user has not reached. Apply muted CSS to their labels.
-5. **Back navigation is non-destructive** — going Back to Schema must not clear `st.session_state.results` or `uploaded_files`.
-6. **Streamlit version target** — ≥ 1.35 for `st.dataframe` single-row selection. Add a `st.data_editor` fallback with a button column for older versions.
-7. **Ollama connection test** — use `httpx.get(base_url, timeout=3)` in a `try/except` block; show result inline in sidebar without navigating.
-8. **Elapsed timer** — implement with `time.time()` stored in session state at process start; update via `st.empty()` placeholder on each yield from the processing generator.
+1. **Single-file entrypoint** — all screens in `app.py` as `_<screen>_screen()` functions dispatched by `st.session_state["step"]`.
+2. **Per-stage progress** — each of the four pipeline stages has its own `st.progress` bar updated via a `progress_callback` passed to `extract_structured_batch_with_validation`.
+3. **Never re-upload on rerun** — file bytes stored in session state on first upload; `st.file_uploader` is only used to detect new additions.
+4. **Back navigation is non-destructive** — navigating Back to Schema does not clear `rows`, `uploaded_files`, or `insights`.
+5. **Streamlit version target** — ≥ 1.43. `@st.dialog` requires ≥ 1.36; `st.dataframe` single-row selection requires ≥ 1.35.
+6. **Dialog close pattern** — the Entry Detail dialog uses `@st.dialog(width="large")` with no manual CSS width overrides. Close is handled by setting `show_entry_detail = False` and calling `st.rerun()`.
+7. **`results_filter` state** — bound as the `key` of the filter `st.text_input`; Streamlit persists it automatically across reruns.

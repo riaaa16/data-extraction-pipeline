@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping
+from typing import Any, Callable, Dict, List, Mapping
 
 from .errors import StructuredExtractionError
 from .ollama_client import OllamaClient
@@ -74,6 +74,7 @@ def extract_structured_batch_with_validation(
     raw_response_dir: str | Path | None = None,
     show_progress: bool = True,
     max_retries: int = 2,
+    progress_callback: Callable[[int, int, Mapping[str, object], int, int], None] | None = None,
 ) -> tuple[List[Dict[str, object]], Dict[str, int]]:
     rows: List[Dict[str, object]] = []
     report = ExtractionRunReport(
@@ -98,6 +99,7 @@ def extract_structured_batch_with_validation(
             progress_index=idx,
             progress_total=total,
             max_retries=max_retries,
+            progress_callback=progress_callback,
         )
         rows.append(row)
 
@@ -127,12 +129,16 @@ def _extract_entry_with_validation(
     progress_index: int,
     progress_total: int,
     max_retries: int,
+    progress_callback: Callable[[int, int, Mapping[str, object], int, int], None] | None,
 ) -> tuple[Dict[str, object], bool, bool, bool]:
     prior_signatures: set[str] = set()
     validation_issues: List[ValidationIssue] = []
     last_error = ""
 
     for attempt in range(max_retries + 1):
+        if progress_callback is not None:
+            progress_callback(progress_index, progress_total, entry, attempt, max_retries)
+
         if show_progress:
             print(
                 f"[llm] extracting {progress_index}/{progress_total} "

@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 from urllib.parse import quote_plus, unquote_plus
 from uuid import uuid4
 
@@ -14,9 +14,11 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 import streamlit as st
+import altair as alt
 
 from depipeline.errors import DepipelineError
 from depipeline.extraction import extract_text_with_diagnostics
+from depipeline.insights import compute_insights
 from depipeline.ollama_client import OllamaClient, OllamaConfig
 from depipeline.schema import SchemaField, parse_schema_fields
 from depipeline.segmentation import (
@@ -31,7 +33,7 @@ STEP_UPLOAD = "upload"
 STEP_SCHEMA = "schema"
 STEP_PROCESSING = "processing"
 STEP_RESULTS = "results"
-STEP_DETAIL = "detail"
+STEP_INSIGHTS = "insights"
 DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 PRIMARY_ACCENT = "#4F6CF7"
@@ -67,6 +69,7 @@ def _init_state() -> None:
             "processed": 0,
         },
         "processing_warnings": [],
+        "insights": None,
         "ollama_model": DEFAULT_OLLAMA_MODEL,
         "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
         "ollama_timeout_minutes": 3,
@@ -79,6 +82,7 @@ def _init_state() -> None:
         "schema_save_name": "",
         "saved_schema_name": "",
         "regex_suggestion": "",
+        "results_filter": "",
     }
 
     for key, value in defaults.items():
@@ -124,7 +128,7 @@ def _step_order() -> List[_StepInfo]:
         _StepInfo(STEP_SCHEMA, "Schema"),
         _StepInfo(STEP_PROCESSING, "Process"),
         _StepInfo(STEP_RESULTS, "Results"),
-        _StepInfo(STEP_DETAIL, "Entry Detail"),
+        _StepInfo(STEP_INSIGHTS, "Insights"),
     ]
 
 
@@ -146,8 +150,8 @@ def _completed_steps() -> set[str]:
         completed.add(STEP_PROCESSING)
     if st.session_state.get("rows"):
         completed.add(STEP_RESULTS)
-    if st.session_state.get("selected_row_id"):
-        completed.add(STEP_DETAIL)
+    if st.session_state.get("insights"):
+        completed.add(STEP_INSIGHTS)
     return completed
 
 
@@ -189,6 +193,8 @@ def _render_stepper() -> None:
             allowed = bool(st.session_state.get("schema_ready"))
         elif info.key == STEP_RESULTS:
             allowed = bool(st.session_state.get("processing_done"))
+        elif info.key == STEP_INSIGHTS:
+            allowed = bool(st.session_state.get("rows"))
         else:
             allowed = bool(st.session_state.get("rows"))
 
@@ -255,6 +261,8 @@ def _render_sidebar() -> None:
             elif info.key == STEP_RESULTS:
                 allowed = bool(st.session_state.get("processing_done"))
             else:
+                allowed = bool(st.session_state.get("rows"))
+            if info.key == STEP_INSIGHTS:
                 allowed = bool(st.session_state.get("rows"))
 
             if st.button(f"{icon} {label}", disabled=not allowed, key=f"nav_{info.key}"):
@@ -432,20 +440,21 @@ def _upload_screen() -> None:
             f"{len(st.session_state['uploaded_files'])} files · { _format_bytes(total_bytes) } total"
         )
         for idx, item in enumerate(list(st.session_state["uploaded_files"])):
-            cols = st.columns([6, 2, 1])
+            cols = st.columns([6, 2, 1], vertical_alignment="center")
             cols[0].write(f"📄 {item['name']}")
-            cols[1].write(_format_bytes(item["size"]))
-            remove_align = cols[2].columns([1, 1], vertical_alignment="bottom")
-            if remove_align[1].button("✕", key=f"remove_upload_{idx}"):
+            cols[1].caption(_format_bytes(item["size"]))
+            if cols[2].button("✕", key=f"remove_upload_{idx}", use_container_width=True):
                 st.session_state["uploaded_files"].pop(idx)
                 st.rerun()
     else:
         st.info("Upload at least one .txt, .docx, or .pdf file to continue.")
 
-    cols = st.columns([6, 2], vertical_alignment="bottom")
-    continue_align = cols[1].columns([1, 1], vertical_alignment="bottom")
-    if continue_align[1].button(
-        "Continue → Schema", disabled=not st.session_state["uploaded_files"]
+    _, btn_col = st.columns([6, 2])
+    if btn_col.button(
+        "Continue → Schema",
+        disabled=not st.session_state["uploaded_files"],
+        type="primary",
+        use_container_width=True,
     ):
         _set_step(STEP_SCHEMA)
         st.rerun()
@@ -513,7 +522,7 @@ def _schema_screen() -> None:
             if cols[3].button(
                 "Remove",
                 key=f"schema_{schema_ns}_remove_{field_id}",
-                use_container_width=True,
+                width="stretch",
             ):
                 remove_field_id = field_id
 
@@ -547,7 +556,7 @@ def _schema_screen() -> None:
         schema_tools = st.columns([2, 1, 2, 1], vertical_alignment="bottom")
         schema_tools[0].text_input("Schema name", key="schema_save_name")
 
-        if schema_tools[1].button("💾 Save", use_container_width=True):
+        if schema_tools[1].button("💾 Save", width="stretch"):
             try:
                 _build_schema_fields(fields)
                 schema_name = _sanitize_schema_name(st.session_state.get("schema_save_name", ""))
@@ -567,7 +576,7 @@ def _schema_screen() -> None:
             key="saved_schema_name",
             help="Select a previously saved schema",
         )
-        if schema_tools[3].button("📂 Load", use_container_width=True):
+        if schema_tools[3].button("📂 Load", width="stretch"):
             selected = st.session_state.get("saved_schema_name", "")
             if not selected:
                 st.warning("Select a saved schema to load")
@@ -689,6 +698,7 @@ def _schema_screen() -> None:
         st.session_state["schema_ready"] = True
         st.session_state["processing_done"] = False
         st.session_state["pipeline_error"] = ""
+        st.session_state["insights"] = None
         _set_step(STEP_PROCESSING)
         st.rerun()
 
@@ -736,32 +746,37 @@ def _processing_screen() -> None:
         else:
             st.success("Processing complete.")
             report = st.session_state.get("run_report") or {}
-            st.write(
-                f"Entries: {report.get('total_entries', 0)} | "
-                f"First-pass valid: {report.get('valid_first_pass', 0)} | "
-                f"Retried: {report.get('retried', 0)} | "
-                f"Failed: {report.get('failed', 0)}"
-            )
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("Total entries", report.get("total_entries", 0))
+            metric_cols[1].metric("First-pass valid", report.get("valid_first_pass", 0))
+            metric_cols[2].metric("Retried", report.get("retried", 0))
+            metric_cols[3].metric("Failed", report.get("failed", 0))
 
         cols = st.columns([6, 2], vertical_alignment="bottom")
-        if cols[0].button("<- Back to Schema"):
+        if cols[0].button("← Back to Schema"):
             _set_step(STEP_SCHEMA)
             st.rerun()
 
-        continue_align = cols[1].columns([1, 1], vertical_alignment="bottom")
-        if continue_align[1].button(
-            "Continue -> Results", disabled=bool(st.session_state.get("pipeline_error"))
+        if cols[1].button(
+            "Continue → Results",
+            disabled=bool(st.session_state.get("pipeline_error")),
+            type="primary",
+            use_container_width=True,
         ):
             _set_step(STEP_RESULTS)
             st.rerun()
         return
 
     st.markdown("**Stage Progress**")
-    extraction_bar = st.progress(0, text="Text Extraction")
-    segmentation_bar = st.progress(0, text="Segmentation")
-    llm_bar = st.progress(0, text="LLM Extraction")
-    validation_bar = st.progress(0, text="Validation")
-    status = st.empty()
+
+    st.markdown("**1 — Text Extraction**")
+    extraction_bar = st.progress(0)
+    st.markdown("**2 — Segmentation**")
+    segmentation_bar = st.progress(0)
+    st.markdown("**3 — LLM Extraction**")
+    llm_bar = st.progress(0)
+    st.markdown("**4 — Validation**")
+    validation_bar = st.progress(0)
     metrics = st.empty()
 
     try:
@@ -785,7 +800,6 @@ def _processing_screen() -> None:
 
         total_files = max(1, len(upload_paths))
         for idx, path in enumerate(upload_paths, start=1):
-            status.write(f"Extraction: {path.name} ({idx}/{total_files})")
             diagnostics = extract_text_with_diagnostics(path)
             for warning in diagnostics.warnings:
                 warnings.append(f"{path.name}: {warning}")
@@ -822,11 +836,29 @@ def _processing_screen() -> None:
             all_entries.extend(entries)
 
             metrics.write(
-                f"Files: {idx}/{total_files} | Entries so far: {len(all_entries)}"
+                f"Files: {idx}/{total_files} | Entries: {len(all_entries)}"
             )
 
-        status.write("LLM extraction")
-        llm_bar.progress(10)
+        llm_bar.progress(0)
+
+        def _on_llm_progress(
+            progress_index: int,
+            progress_total: int,
+            entry: Mapping[str, object],
+            attempt: int,
+            max_retries: int,
+        ) -> None:
+            total = max(1, int(progress_total))
+            base = max(0, int(progress_index) - 1)
+            denom = max(1, int(max_retries) + 1)
+            within = (int(attempt) + 1) / denom
+            pct = int(((base + within) / total) * 100)
+            llm_bar.progress(min(99, max(0, pct)))
+
+            metrics.write(
+                f"Files: {total_files}/{total_files} | Entries: {len(all_entries)} | "
+                f"LLM: {progress_index}/{progress_total}"
+            )
 
         rows, report = extract_structured_batch_with_validation(
             all_entries,
@@ -835,13 +867,11 @@ def _processing_screen() -> None:
             raw_response_dir=".depipeline_logs/raw_responses",
             show_progress=False,
             max_retries=int(st.session_state["validation_max_retries"]),
+            progress_callback=_on_llm_progress,
         )
 
         llm_bar.progress(100)
-        status.write("Validation")
         validation_bar.progress(100)
-
-        status.write("Validation complete")
         metrics.write(
             f"Files: {total_files}/{total_files} | Entries: {len(all_entries)} | Processed: {len(rows)}"
         )
@@ -851,6 +881,7 @@ def _processing_screen() -> None:
         st.session_state["run_report"] = report
         st.session_state["processing_warnings"] = warnings
         st.session_state["pipeline_error"] = ""
+        st.session_state["insights"] = compute_insights(rows, schema_fields)
         st.session_state["processing_metrics"] = {
             "files": total_files,
             "entries": len(all_entries),
@@ -863,6 +894,114 @@ def _processing_screen() -> None:
         st.rerun()
 
 
+def _insights_screen() -> None:
+    st.subheader("Insights")
+    st.caption("Aggregated themes and simple counts over your processed dataset.")
+
+    rows: List[Dict[str, Any]] = st.session_state.get("rows", [])
+    schema_fields: List[SchemaField] = st.session_state.get("schema_field_objects", [])
+
+    if not rows:
+        if st.session_state.get("pipeline_error"):
+            st.error(str(st.session_state.get("pipeline_error")))
+        else:
+            st.warning("No processed rows found in this session.")
+            st.caption(
+                "If you can see Results in another tab, you may have opened a new browser session. "
+                "Use the in-app navigation in the same tab, or re-run Processing."
+            )
+        controls = st.columns([6, 2], vertical_alignment="bottom")
+        if controls[0].button("← Back to Processing"):
+            _set_step(STEP_PROCESSING)
+            st.rerun()
+        return
+
+    insights = st.session_state.get("insights")
+    if insights is None:
+        insights = compute_insights(rows, schema_fields)
+        st.session_state["insights"] = insights
+
+    non_empty_text = sum(
+        1
+        for row in rows
+        if isinstance(row.get("raw_text"), str) and str(row.get("raw_text")).strip()
+    )
+    if not insights.keywords and not insights.themes and not insights.field_breakdowns:
+        st.info(
+            "Insights can’t be produced yet because there isn’t enough usable data. "
+            "This usually happens when `raw_text` is empty for all rows and there are no low-cardinality fields to summarize."
+        )
+    elif non_empty_text == 0:
+        st.info(
+            "Themes/keywords are unavailable because none of the rows include non-empty `raw_text`. "
+            "Field breakdowns (if any) are still shown below."
+        )
+
+    with st.container(border=True):
+        st.markdown("**Themes**")
+        if insights.themes:
+            theme_data = [
+                {"theme": item.theme, "count": int(item.count)} for item in insights.themes
+            ]
+            theme_chart = (
+                alt.Chart(alt.Data(values=theme_data))
+                .mark_bar()
+                .encode(
+                    x=alt.X("count:Q", title="Count"),
+                    y=alt.Y("theme:N", sort="-x", title="Theme"),
+                    tooltip=["theme:N", "count:Q"],
+                )
+            )
+            st.altair_chart(theme_chart, width="stretch")
+        else:
+            st.caption("No themes available (no text found).")
+
+    with st.container(border=True):
+        st.markdown("**Keywords**")
+        if insights.keywords:
+            keyword_data = [
+                {"keyword": item.keyword, "count": int(item.count)}
+                for item in insights.keywords
+            ]
+            keyword_chart = (
+                alt.Chart(alt.Data(values=keyword_data))
+                .mark_bar()
+                .encode(
+                    x=alt.X("count:Q", title="Count"),
+                    y=alt.Y("keyword:N", sort="-x", title="Keyword"),
+                    tooltip=["keyword:N", "count:Q"],
+                )
+            )
+            st.altair_chart(keyword_chart, width="stretch")
+        else:
+            st.caption("No keywords available (no text found).")
+
+    if insights.field_breakdowns:
+        st.markdown("---")
+        st.markdown("**Field breakdowns**")
+        for field_name, breakdown in insights.field_breakdowns.items():
+            with st.container(border=True):
+                st.markdown(f"**{field_name}**")
+                breakdown_data = [
+                    {"value": str(value), "count": int(count)} for value, count in breakdown
+                ]
+                breakdown_chart = (
+                    alt.Chart(alt.Data(values=breakdown_data))
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("count:Q", title="Count"),
+                        y=alt.Y("value:N", sort="-x", title="Value"),
+                        tooltip=["value:N", "count:Q"],
+                    )
+                )
+                st.altair_chart(breakdown_chart, width="stretch")
+
+    controls = st.columns([6, 2], vertical_alignment="bottom")
+    if controls[0].button("← Back to Results"):
+        _set_step(STEP_RESULTS)
+        st.rerun()
+
+
 def _results_screen() -> None:
     st.subheader("Results")
 
@@ -871,21 +1010,38 @@ def _results_screen() -> None:
 
     if not rows:
         st.warning("No processed rows found. Run processing first.")
-        if st.button("<- Back to Processing"):
+        if st.button("← Back to Processing"):
             _set_step(STEP_PROCESSING)
             st.rerun()
         return
 
-    warnings = st.session_state.get("processing_warnings", [])
-    for warning in warnings:
-        st.warning(warning)
-
+    # Summary metric cards
     report = st.session_state.get("run_report") or {}
-    st.write(
-        f"Total: {report.get('total_entries', 0)} | "
-        f"First pass: {report.get('valid_first_pass', 0)} | "
-        f"Retried: {report.get('retried', 0)} | "
-        f"Failed: {report.get('failed', 0)}"
+    failed_count = int(report.get("failed", 0))
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Total entries", report.get("total_entries", 0))
+    metric_cols[1].metric("First-pass valid", report.get("valid_first_pass", 0))
+    metric_cols[2].metric("Retried", report.get("retried", 0))
+    metric_cols[3].metric(
+        "Failed",
+        failed_count,
+        delta=f"{failed_count} failed" if failed_count else None,
+        delta_color="inverse",
+    )
+
+    # Warnings — collapsed expander
+    warnings = st.session_state.get("processing_warnings", [])
+    if warnings:
+        with st.expander(f"Warnings ({len(warnings)})", expanded=False):
+            for warning in warnings:
+                st.warning(warning)
+
+    # Filter bar
+    filter_text = st.text_input(
+        "Filter",
+        placeholder="🔍 Type to filter by any field…",
+        key="results_filter",
+        label_visibility="collapsed",
     )
 
     preview_columns = ["id"] + [field.name for field in schema_fields] + ["confidence"]
@@ -894,15 +1050,22 @@ def _results_screen() -> None:
         preview = {key: row.get(key) for key in preview_columns}
         preview_rows.append(preview)
 
+    if filter_text.strip():
+        q = filter_text.strip().lower()
+        preview_rows = [
+            r for r in preview_rows if any(q in str(v).lower() for v in r.values())
+        ]
+
     st.caption(
-        "Tip: Use row selection + 'Open Entry Detail' to avoid opening a new session in a new tab."
+        f"Showing {len(preview_rows)} of {len(rows)} rows · "
+        "select a row then click **Open Entry Detail** to inspect."
     )
 
     table_selection_id = ""
     try:
         event = st.dataframe(
             preview_rows,
-            width="stretch",
+            use_container_width=True,
             on_select="rerun",
             selection_mode="single-row",
         )
@@ -911,20 +1074,23 @@ def _results_screen() -> None:
             if 0 <= selected_idx < len(preview_rows):
                 table_selection_id = str(preview_rows[selected_idx].get("id", ""))
     except TypeError:
-        st.dataframe(preview_rows, width="stretch")
+        st.dataframe(preview_rows, use_container_width=True)
 
+    dl_col, _ = st.columns([2, 6])
     csv_bytes = _rows_to_csv_bytes(rows, schema_fields)
-    st.download_button(
-        "Export CSV",
+    dl_col.download_button(
+        "📥 Export CSV",
         data=csv_bytes,
         file_name="depipeline_results.csv",
         mime="text/csv",
+        use_container_width=True,
     )
 
     row_ids = [str(row.get("id", "")) for row in rows]
     selected_default = st.session_state.get("selected_row_id", "")
     selected_index = row_ids.index(selected_default) if selected_default in row_ids else 0
-    selected = st.selectbox(
+    entry_row = st.columns([6, 2], vertical_alignment="bottom")
+    selected = entry_row[0].selectbox(
         "Select entry",
         options=row_ids,
         index=selected_index,
@@ -933,20 +1099,23 @@ def _results_screen() -> None:
 
     effective_selected = table_selection_id or selected
 
-    controls = st.columns([6, 2], vertical_alignment="bottom")
-    if controls[0].button("<- Back to Processing"):
-        _set_step(STEP_PROCESSING)
-        st.rerun()
-
-    open_align = controls[1].columns([1, 1], vertical_alignment="bottom")
-    if open_align[1].button("Open Entry Detail"):
+    if entry_row[1].button("Open Entry Detail →", use_container_width=True):
         st.session_state["selected_row_id"] = effective_selected
         st.session_state["show_entry_detail"] = True
         st.rerun()
 
+    controls = st.columns([6, 2], vertical_alignment="bottom")
+    if controls[0].button("← Back to Processing"):
+        _set_step(STEP_PROCESSING)
+        st.rerun()
+
+    if controls[1].button("Continue → Insights", type="primary", use_container_width=True):
+        st.session_state["selected_row_id"] = effective_selected
+        _set_step(STEP_INSIGHTS)
+        st.rerun()
+
     if st.session_state.get("show_entry_detail"):
-        st.divider()
-        _render_entry_detail_inline()
+        _render_entry_detail_dialog()
 
 
 def _rows_to_csv_bytes(rows: List[Dict[str, Any]], schema_fields: List[SchemaField]) -> bytes:
@@ -962,9 +1131,17 @@ def _rows_to_csv_bytes(rows: List[Dict[str, Any]], schema_fields: List[SchemaFie
     return buffer.getvalue().encode("utf-8")
 
 
-def _render_entry_detail_inline() -> None:
-    st.subheader("Entry Detail")
+@st.dialog("Entry Detail", width="large")
+def _render_entry_detail_dialog() -> None:
+    _render_entry_detail_contents()
+    st.divider()
+    close_cols = st.columns([6, 2], vertical_alignment="bottom")
+    if close_cols[1].button("Close", use_container_width=True):
+        st.session_state["show_entry_detail"] = False
+        st.rerun()
 
+
+def _render_entry_detail_contents() -> None:
     rows: List[Dict[str, Any]] = st.session_state.get("rows", [])
     schema_fields: List[SchemaField] = st.session_state.get("schema_field_objects", [])
     selected_id = st.session_state.get("selected_row_id", "")
@@ -976,39 +1153,55 @@ def _render_entry_detail_inline() -> None:
     row = next((item for item in rows if str(item.get("id", "")) == selected_id), rows[0])
     st.session_state["selected_row_id"] = str(row.get("id", ""))
 
-    st.text_area("Raw Text", value=str(row.get("raw_text", "")), height=220, disabled=True)
+    row_ids = [str(r.get("id", "")) for r in rows]
+    current_idx = next(
+        (i for i, rid in enumerate(row_ids) if rid == str(row.get("id", ""))), 0
+    )
 
-    edited: Dict[str, Any] = {}
+    nav_cols = st.columns([4, 1, 1])
+    nav_cols[0].caption(f"Entry {current_idx + 1} of {len(rows)}")
+    if nav_cols[1].button("‹ Prev", disabled=current_idx == 0, use_container_width=True):
+        st.session_state["selected_row_id"] = row_ids[current_idx - 1]
+        st.rerun()
+    if nav_cols[2].button("Next ›", disabled=current_idx >= len(rows) - 1, use_container_width=True):
+        st.session_state["selected_row_id"] = row_ids[current_idx + 1]
+        st.rerun()
+
+    confidence = row.get("confidence")
+    if confidence is not None:
+        try:
+            st.metric("Confidence", f"{float(confidence):.2f}")
+        except (ValueError, TypeError):
+            pass
+
+    st.text_area("Raw Text", value=str(row.get("raw_text", "")), height=180, disabled=True)
+
     for field in schema_fields:
         key = f"detail_{row.get('id')}_{field.name}"
         current_value = row.get(field.name)
 
         if field.type == "number":
             numeric_value = float(current_value) if isinstance(current_value, (int, float)) else 0.0
-            edited[field.name] = st.number_input(field.name, value=numeric_value, key=key)
+            st.number_input(field.name, value=numeric_value, key=key, disabled=True)
         elif field.type == "boolean":
-            edited[field.name] = st.checkbox(field.name, value=bool(current_value), key=key)
+            st.checkbox(field.name, value=bool(current_value), key=key, disabled=True)
         elif field.type == "enum" and field.enum:
             options = list(field.enum)
             current = str(current_value) if current_value in options else options[0]
-            edited[field.name] = st.selectbox(field.name, options=options, index=options.index(current), key=key)
+            st.selectbox(
+                field.name,
+                options=options,
+                index=options.index(current),
+                key=key,
+                disabled=True,
+            )
         else:
-            edited[field.name] = st.text_input(field.name, value="" if current_value is None else str(current_value), key=key)
-
-    controls = st.columns([6, 2], vertical_alignment="bottom")
-    if controls[0].button("Save"):
-        for idx, existing in enumerate(rows):
-            if str(existing.get("id", "")) == str(row.get("id", "")):
-                for key, value in edited.items():
-                    rows[idx][key] = value
-                st.session_state["rows"] = rows
-                st.success("Saved edits")
-                break
-
-    hide_align = controls[1].columns([1, 1], vertical_alignment="bottom")
-    if hide_align[1].button("Hide Entry Detail"):
-        st.session_state["show_entry_detail"] = False
-        st.rerun()
+            st.text_input(
+                field.name,
+                value="" if current_value is None else str(current_value),
+                key=key,
+                disabled=True,
+            )
 
 
 def main() -> None:
@@ -1016,8 +1209,26 @@ def main() -> None:
     st.markdown(
         """
         <style>
+        /* Layout */
         .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
+
+        /* Radio groups: left-align options */
         div[data-testid="stRadio"] [role="radiogroup"] {justify-content: flex-start;}
+
+        /* Monospace font for raw-text and regex text areas */
+        div[data-testid="stTextArea"] textarea {
+            font-family: "JetBrains Mono", "Fira Mono", "Consolas", monospace;
+            font-size: 13px;
+        }
+
+        /* Tighten sidebar nav buttons */
+        section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+            text-align: left;
+            justify-content: flex-start;
+        }
+
+        /* Metric card delta — suppress arrow for neutral deltas */
+        div[data-testid="stMetricDelta"] svg {display: none;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1027,12 +1238,12 @@ def main() -> None:
     _init_state()
     _render_sidebar()
 
-    # Allow row-level links from Results table to open Entry Detail.
-    qp_step = st.query_params.get("step")
+    # Allow row-level links from Results table to open Entry Detail inline.
     qp_entry = st.query_params.get("entry_id")
-    if qp_step == "detail" and qp_entry:
+    if qp_entry:
         st.session_state["selected_row_id"] = unquote_plus(str(qp_entry))
-        st.session_state["step"] = STEP_DETAIL
+        st.session_state["show_entry_detail"] = True
+        st.session_state["step"] = STEP_RESULTS
 
     nav_step = st.query_params.get("nav")
     if nav_step:
@@ -1049,9 +1260,9 @@ def main() -> None:
         _schema_screen()
     elif step == STEP_PROCESSING:
         _processing_screen()
+    elif step == STEP_INSIGHTS:
+        _insights_screen()
     else:
-        if step == STEP_DETAIL:
-            st.session_state["show_entry_detail"] = True
         _results_screen()
 
 
