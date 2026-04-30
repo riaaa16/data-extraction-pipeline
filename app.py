@@ -443,7 +443,7 @@ def _upload_screen() -> None:
             cols = st.columns([6, 2, 1], vertical_alignment="center")
             cols[0].write(f"📄 {item['name']}")
             cols[1].caption(_format_bytes(item["size"]))
-            if cols[2].button("✕", key=f"remove_upload_{idx}", use_container_width=True):
+            if cols[2].button("✕", key=f"remove_upload_{idx}", width="stretch"):
                 st.session_state["uploaded_files"].pop(idx)
                 st.rerun()
     else:
@@ -454,7 +454,7 @@ def _upload_screen() -> None:
         "Continue → Schema",
         disabled=not st.session_state["uploaded_files"],
         type="primary",
-        use_container_width=True,
+        width="stretch",
     ):
         _set_step(STEP_SCHEMA)
         st.rerun()
@@ -761,7 +761,7 @@ def _processing_screen() -> None:
             "Continue → Results",
             disabled=bool(st.session_state.get("pipeline_error")),
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             _set_step(STEP_RESULTS)
             st.rerun()
@@ -1036,36 +1036,50 @@ def _results_screen() -> None:
             for warning in warnings:
                 st.warning(warning)
 
-    # Filter bar
+    # Search bar
+    preview_columns = ["id"] + [field.name for field in schema_fields] + ["confidence"]
+    searchable_fields = ["id"] + [f.name for f in schema_fields] + ["raw_text", "confidence"]
+    field_hint = ", ".join(searchable_fields[:6]) + (" …" if len(searchable_fields) > 6 else "")
+
     filter_text = st.text_input(
-        "Filter",
-        placeholder="🔍 Type to filter by any field…",
+        "Filter results",
+        placeholder="🔍 Filter by ID, field values, or raw text…",
         key="results_filter",
+        help=f"Searches across all rows for matches in: {field_hint}",
         label_visibility="collapsed",
     )
 
-    preview_columns = ["id"] + [field.name for field in schema_fields] + ["confidence"]
     preview_rows: List[Dict[str, Any]] = []
-    for row in rows[: int(st.session_state["sample_preview_count"])]:
-        preview = {key: row.get(key) for key in preview_columns}
-        preview_rows.append(preview)
-
     if filter_text.strip():
         q = filter_text.strip().lower()
-        preview_rows = [
-            r for r in preview_rows if any(q in str(v).lower() for v in r.values())
-        ]
+        for row in rows:
+            projected = {key: row.get(key) for key in preview_columns}
+            # Also match against raw_text which is not in preview_columns
+            all_values = list(projected.values()) + [row.get("raw_text", "")]
+            if any(q in str(v).lower() for v in all_values):
+                preview_rows.append(projected)
+    else:
+        for row in rows[: int(st.session_state["sample_preview_count"])]:
+            preview_rows.append({key: row.get(key) for key in preview_columns})
 
-    st.caption(
-        f"Showing {len(preview_rows)} of {len(rows)} rows · "
-        "select a row then click **Open Entry Detail** to inspect."
-    )
+    if filter_text.strip():
+        match_word = "match" if len(preview_rows) == 1 else "matches"
+        st.caption(
+            f"**{len(preview_rows)} {match_word}** across all {len(rows)} rows · "
+            "select a row then click **Open Entry Detail** to inspect."
+        )
+    else:
+        st.caption(
+            f"Showing {min(len(preview_rows), int(st.session_state['sample_preview_count']))} "
+            f"of {len(rows)} rows · "
+            "select a row then click **Open Entry Detail** to inspect."
+        )
 
     table_selection_id = ""
     try:
         event = st.dataframe(
             preview_rows,
-            use_container_width=True,
+            width="stretch",
             on_select="rerun",
             selection_mode="single-row",
         )
@@ -1074,7 +1088,7 @@ def _results_screen() -> None:
             if 0 <= selected_idx < len(preview_rows):
                 table_selection_id = str(preview_rows[selected_idx].get("id", ""))
     except TypeError:
-        st.dataframe(preview_rows, use_container_width=True)
+        st.dataframe(preview_rows, width="stretch")
 
     dl_col, _ = st.columns([2, 6])
     csv_bytes = _rows_to_csv_bytes(rows, schema_fields)
@@ -1083,7 +1097,7 @@ def _results_screen() -> None:
         data=csv_bytes,
         file_name="depipeline_results.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
     row_ids = [str(row.get("id", "")) for row in rows]
@@ -1099,7 +1113,7 @@ def _results_screen() -> None:
 
     effective_selected = table_selection_id or selected
 
-    if entry_row[1].button("Open Entry Detail →", use_container_width=True):
+    if entry_row[1].button("Open Entry Detail →", width="stretch"):
         st.session_state["selected_row_id"] = effective_selected
         st.session_state["show_entry_detail"] = True
         st.rerun()
@@ -1109,7 +1123,7 @@ def _results_screen() -> None:
         _set_step(STEP_PROCESSING)
         st.rerun()
 
-    if controls[1].button("Continue → Insights", type="primary", use_container_width=True):
+    if controls[1].button("Continue → Insights", type="primary", width="stretch"):
         st.session_state["selected_row_id"] = effective_selected
         _set_step(STEP_INSIGHTS)
         st.rerun()
@@ -1136,7 +1150,7 @@ def _render_entry_detail_dialog() -> None:
     _render_entry_detail_contents()
     st.divider()
     close_cols = st.columns([6, 2], vertical_alignment="bottom")
-    if close_cols[1].button("Close", use_container_width=True):
+    if close_cols[1].button("Close", width="stretch"):
         st.session_state["show_entry_detail"] = False
         st.rerun()
 
@@ -1160,10 +1174,10 @@ def _render_entry_detail_contents() -> None:
 
     nav_cols = st.columns([4, 1, 1])
     nav_cols[0].caption(f"Entry {current_idx + 1} of {len(rows)}")
-    if nav_cols[1].button("‹ Prev", disabled=current_idx == 0, use_container_width=True):
+    if nav_cols[1].button("‹ Prev", disabled=current_idx == 0, width="stretch"):
         st.session_state["selected_row_id"] = row_ids[current_idx - 1]
         st.rerun()
-    if nav_cols[2].button("Next ›", disabled=current_idx >= len(rows) - 1, use_container_width=True):
+    if nav_cols[2].button("Next ›", disabled=current_idx >= len(rows) - 1, width="stretch"):
         st.session_state["selected_row_id"] = row_ids[current_idx + 1]
         st.rerun()
 

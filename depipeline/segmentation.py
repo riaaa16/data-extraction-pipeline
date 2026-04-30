@@ -200,12 +200,14 @@ def segment_entries_llm_boundaries(
     *,
     dataset_description: str | None = None,
     min_entry_chars: int = 20,
+    merge_below_chars: int = 80,
     max_entries: int = 200,
 ) -> List[Dict[str, object]]:
-    """Use an LLM to return entry boundaries only (line ranges).
+    """Use an LLM to identify where top-level entries start (line numbers only).
 
-    The LLM must return JSON: {"entries": [{"start_line": <int>, "end_line": <int>}, ...]}.
-    Line numbers are 1-based and inclusive, based on the normalized input text.
+    The LLM returns: {"entry_starts": [<line_no>, ...]}
+    Line numbers are 1-based. Text between consecutive start lines forms each entry.
+    A post-processing merge pass eliminates fragments shorter than merge_below_chars.
     """
 
     text = normalize_text(text)
@@ -218,6 +220,7 @@ def segment_entries_llm_boundaries(
         )
 
     lines = text.split("\n")
+    n_lines = len(lines)
     numbered_lines = "\n".join(f"{idx + 1}| {line}" for idx, line in enumerate(lines))
 
     dataset_hint = normalize_text(dataset_description or "").strip()
@@ -226,20 +229,23 @@ def segment_entries_llm_boundaries(
     )
 
     system_prompt = (
-        "You split a single document into discrete entries and return ONLY boundaries. "
+        "You identify where top-level entries (records) begin in a document.\n"
         "Return ONLY valid JSON. Do not include markdown.\n\n"
+        "Output schema: {\"entry_starts\": [<line_number>, ...]}\n\n"
         "Rules:\n"
-        "- Output schema: {\"entries\": [{\"start_line\": <int>, \"end_line\": <int>}, ...]}\n"
-        "- Line numbers are 1-based and refer to the numbered input lines.\n"
-        "- Keep entries in original order and cover the entire input (no omissions).\n"
-        "- Do NOT merge distinct records into one entry.\n"
-        "- Each entry should be a coherent unit that can be extracted independently.\n"
+        "- List the 1-based line number where each DISTINCT top-level entry begins.\n"
+        "- A new entry starts only at a clear structural marker: a participant label,\n"
+        "  numbered ID, explicit header, separator line, or a strong topic shift.\n"
+        "- Do NOT start a new entry for: sub-paragraphs, blank lines between paragraphs\n"
+        "  of the same record, follow-up questions, or continuation text.\n"
+        "- IMPORTANT: err on the side of FEWER entries — when in doubt, keep text together.\n"
+        "- The first entry always starts at line 1.\n"
         + dataset_clause
     )
 
     user_prompt = (
-        "Split the following numbered lines into entry boundaries. "
-        "Return ONLY JSON with start_line/end_line.\n\n"
+        "Identify the start line of each distinct entry in the text below.\n"
+        "Return ONLY JSON: {\"entry_starts\": [1, ...]}\n\n"
         f"{numbered_lines}"
     )
 
@@ -251,27 +257,30 @@ def segment_entries_llm_boundaries(
     except Exception as exc:
         raise DepipelineError(f"LLM entry separation failed: {exc}") from exc
 
-    ranges = _coerce_llm_line_ranges(payload, max_lines=len(lines))
-    if not ranges:
-        raise DepipelineError("LLM returned zero entry boundaries")
-    if len(ranges) > max_entries:
-        raise DepipelineError(f"LLM returned too many entries ({len(ranges)} > {max_entries})")
+    starts = _coerce_entry_starts(payload, n_lines=n_lines)
+    if not starts:
+        raise DepipelineError("LLM returned no entry start lines")
+    if len(starts) > max_entries:
+        raise DepipelineError(f"LLM returned too many entries ({len(starts)} > {max_entries})")
 
-    entries: List[str] = []
-    for start, end in ranges:
-        chunk = "\n".join(lines[start - 1:end]).strip()
-        if len(chunk) >= min_entry_chars:
-            entries.append(chunk)
+    # Slice text between consecutive start lines
+    chunks: List[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else n_lines + 1
+        chunk = "\n".join(lines[start - 1 : end - 1]).strip()
+        if chunk:
+            chunks.append(chunk)
 
-    if not entries:
+    # Merge fragments that are too short (catches any remaining over-splits)
+    merged = _merge_small_chunks(chunks, merge_below_chars=merge_below_chars)
+    final_chunks = [c for c in merged if len(c) >= min_entry_chars]
+
+    if not final_chunks:
         raise DepipelineError("LLM entry boundaries produced no usable entries")
 
     return [
-        {
-            "id": index,
-            "raw_text": entry,
-        }
-        for index, entry in enumerate(entries, start=1)
+        {"id": index, "raw_text": entry}
+        for index, entry in enumerate(final_chunks, start=1)
     ]
 
 
@@ -313,6 +322,44 @@ def _coerce_entries_list(payload: Any, *, min_entry_chars: int) -> List[str]:
             entries.append(normalized)
 
     return entries
+
+
+def _coerce_entry_starts(payload: Any, *, n_lines: int) -> List[int]:
+    """Extract sorted, valid 1-based start line numbers from the LLM payload.
+
+    Accepts:
+    - {"entry_starts": [1, 5, 12, ...]}
+    - {"entries": [{"start_line": 1}, ...]}   (backwards-compat)
+    - [1, 5, 12, ...]
+    """
+    if isinstance(payload, dict):
+        if "entry_starts" in payload:
+            raw = payload["entry_starts"]
+        elif "entries" in payload:
+            items = payload["entries"]
+            if isinstance(items, list) and items and isinstance(items[0], dict):
+                raw = [item.get("start_line") for item in items if isinstance(item, dict)]
+            else:
+                raw = items
+        else:
+            raw = []
+    elif isinstance(payload, list):
+        raw = payload
+    else:
+        raw = []
+
+    starts: List[int] = []
+    for val in raw:
+        if isinstance(val, float) and val == int(val):
+            val = int(val)
+        if isinstance(val, int) and 1 <= val <= n_lines:
+            starts.append(val)
+
+    starts = sorted(set(starts))
+    # Always anchor at line 1
+    if not starts or starts[0] != 1:
+        starts = sorted({1} | set(starts))
+    return starts
 
 
 def _coerce_llm_line_ranges(payload: Any, *, max_lines: int) -> List[tuple[int, int]]:
