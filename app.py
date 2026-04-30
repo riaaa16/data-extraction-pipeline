@@ -83,6 +83,9 @@ def _init_state() -> None:
         "saved_schema_name": "",
         "regex_suggestion": "",
         "results_filter": "",
+        "schema_manage_action": "",
+        "schema_rename_to": "",
+        "saved_schema_name_pending": "",
     }
 
     for key, value in defaults.items():
@@ -170,7 +173,6 @@ def _render_stepper() -> None:
         .stepper-dot.active {background:#4F6CF7;}
         .stepper-dot.future {background:#CBD5E1;}
         .stepper-label {text-align:center; color:#6B7280; font-size:12px; margin-top:6px;}
-        .stepper-link {text-decoration:none; color:inherit;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -185,30 +187,9 @@ def _render_stepper() -> None:
         else:
             cls = "future"
 
-        if info.key == STEP_UPLOAD:
-            allowed = True
-        elif info.key == STEP_SCHEMA:
-            allowed = bool(st.session_state.get("uploaded_files"))
-        elif info.key == STEP_PROCESSING:
-            allowed = bool(st.session_state.get("schema_ready"))
-        elif info.key == STEP_RESULTS:
-            allowed = bool(st.session_state.get("processing_done"))
-        elif info.key == STEP_INSIGHTS:
-            allowed = bool(st.session_state.get("rows"))
-        else:
-            allowed = bool(st.session_state.get("rows"))
-
         dot = f"<span class='stepper-dot {cls}'></span>"
         label = f"<div class='stepper-label'>{info.label}</div>"
-        if allowed:
-            item = (
-                f"<a class='stepper-link' href='?nav={info.key}'>"
-                f"{dot}{label}</a>"
-            )
-        else:
-            item = f"{dot}{label}"
-
-        items.append(f"<div class='stepper-item'>{item}</div>")
+        items.append(f"<div class='stepper-item'>{dot}{label}</div>")
 
     st.markdown(f"<div class='stepper'>{''.join(items)}</div>", unsafe_allow_html=True)
 
@@ -533,8 +514,6 @@ def _schema_screen() -> None:
         st.rerun()
 
     saved_dir = _saved_schema_dir()
-    saved_paths = sorted(saved_dir.glob("*.json"))
-    saved_names = [path.stem for path in saved_paths]
 
     add_cols = st.columns([1, 5], vertical_alignment="bottom")
     if add_cols[0].button("+ Add Field"):
@@ -553,34 +532,58 @@ def _schema_screen() -> None:
     st.session_state["schema_fields"] = fields
 
     with st.expander("Saved Schemas", expanded=False):
-        schema_tools = st.columns([2, 1, 2, 1], vertical_alignment="bottom")
-        schema_tools[0].text_input("Schema name", key="schema_save_name")
-
-        if schema_tools[1].button("💾 Save", width="stretch"):
+        # ── Save current schema ───────────────────────────────────────────────
+        st.caption("Save current schema as")
+        save_cols = st.columns([4, 1], vertical_alignment="top")
+        save_cols[0].text_input(
+            "Save current schema as",
+            key="schema_save_name",
+            placeholder="e.g. interview-fields",
+            label_visibility="collapsed",
+        )
+        if save_cols[1].button("💾 Save", width="stretch"):
             try:
                 _build_schema_fields(fields)
                 schema_name = _sanitize_schema_name(st.session_state.get("schema_save_name", ""))
                 if not schema_name:
                     raise ValueError("Enter a schema name before saving")
-
                 payload = {"fields": _schema_payload_from_form(fields)}
                 out_path = saved_dir / f"{schema_name}.json"
                 out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-                st.success("Saved.")
+                st.session_state["schema_manage_action"] = ""
+                st.success(f"Saved as '{schema_name}'.")
             except (DepipelineError, ValueError) as exc:
                 st.error(str(exc))
 
-        schema_tools[2].selectbox(
-            "Load schema",
-            options=[""] + saved_names,
-            key="saved_schema_name",
-            help="Select a previously saved schema",
-        )
-        if schema_tools[3].button("📂 Load", width="stretch"):
+        # ── Manage saved schemas ──────────────────────────────────────────────
+        saved_paths = sorted(saved_dir.glob("*.json"))
+        saved_names = [p.stem for p in saved_paths]
+
+        if saved_names:
+            st.markdown("---")
+
+            # Apply any pending selection set by rename/delete handlers in the
+            # previous run (must happen before the selectbox is instantiated).
+            pending = st.session_state.get("saved_schema_name_pending", "")
+            if pending and pending in saved_names:
+                st.session_state["saved_schema_name"] = pending
+            st.session_state["saved_schema_name_pending"] = ""
+
+            # Ensure the stored selection is still valid after a rename/delete.
+            if st.session_state.get("saved_schema_name", "") not in saved_names:
+                st.session_state["saved_schema_name"] = saved_names[0]
+
+            st.caption("Select a saved schema")
+            mgmt_cols = st.columns([4, 1, 1, 1], vertical_alignment="top")
+            mgmt_cols[0].selectbox(
+                "Select a saved schema",
+                options=saved_names,
+                key="saved_schema_name",
+                label_visibility="collapsed",
+            )
             selected = st.session_state.get("saved_schema_name", "")
-            if not selected:
-                st.warning("Select a saved schema to load")
-            else:
+
+            if mgmt_cols[1].button("📂 Load", width="stretch"):
                 try:
                     raw = json.loads((saved_dir / f"{selected}.json").read_text(encoding="utf-8"))
                     loaded = parse_schema_fields(raw.get("fields", []) if isinstance(raw, dict) else raw)
@@ -590,10 +593,75 @@ def _schema_screen() -> None:
                     st.session_state["schema_editor_ns"] = int(
                         st.session_state.get("schema_editor_ns", 0)
                     ) + 1
-                    st.success("Loaded.")
+                    st.session_state["schema_manage_action"] = ""
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"Failed loading schema '{selected}': {exc}")
+                    st.error(f"Failed loading '{selected}': {exc}")
+
+            action = st.session_state.get("schema_manage_action", "")
+
+            if mgmt_cols[2].button(
+                "✏️ Rename",
+                width="stretch",
+                type="primary" if action == "rename" else "secondary",
+            ):
+                if action == "rename":
+                    st.session_state["schema_manage_action"] = ""
+                else:
+                    st.session_state["schema_manage_action"] = "rename"
+                    st.session_state["schema_rename_to"] = selected
+                st.rerun()
+
+            if mgmt_cols[3].button(
+                "🗑️ Delete",
+                width="stretch",
+                type="primary" if action == "delete" else "secondary",
+            ):
+                if action == "delete":
+                    st.session_state["schema_manage_action"] = ""
+                else:
+                    st.session_state["schema_manage_action"] = "delete"
+                st.rerun()
+
+            # Inline rename form
+            if action == "rename":
+                st.caption("New name")
+                rename_cols = st.columns([4, 1], vertical_alignment="top")
+                rename_cols[0].text_input(
+                    "New name",
+                    key="schema_rename_to",
+                    label_visibility="collapsed",
+                )
+                if rename_cols[1].button("✓ Confirm", width="stretch", type="primary"):
+                    new_name = _sanitize_schema_name(st.session_state.get("schema_rename_to", ""))
+                    if not new_name:
+                        st.error("Enter a valid name.")
+                    elif new_name == selected:
+                        st.session_state["schema_manage_action"] = ""
+                        st.rerun()
+                    else:
+                        new_path = saved_dir / f"{new_name}.json"
+                        if new_path.exists():
+                            st.error(f"A schema named '{new_name}' already exists.")
+                        else:
+                            (saved_dir / f"{selected}.json").rename(new_path)
+                            st.session_state["saved_schema_name_pending"] = new_name
+                            st.session_state["schema_manage_action"] = ""
+                            st.rerun()
+
+            # Inline delete confirmation
+            elif action == "delete":
+                st.warning(f"Delete **{selected}**? This cannot be undone.")
+                confirm_cols = st.columns([1, 1, 4], vertical_alignment="top")
+                if confirm_cols[0].button("Cancel"):
+                    st.session_state["schema_manage_action"] = ""
+                    st.rerun()
+                if confirm_cols[1].button("🗑️ Delete", type="primary"):
+                    (saved_dir / f"{selected}.json").unlink(missing_ok=True)
+                    remaining = [p.stem for p in sorted(saved_dir.glob("*.json"))]
+                    st.session_state["saved_schema_name_pending"] = remaining[0] if remaining else ""
+                    st.session_state["schema_manage_action"] = ""
+                    st.rerun()
 
     with st.expander("Entry Separation", expanded=True):
         st.radio(
@@ -613,23 +681,6 @@ def _schema_screen() -> None:
                 height=100,
                 help="Each regex marks the START of a new entry. Uses Python regex with multiline mode.",
             )
-
-            presets = {
-                "Interview transcript - speakers": r"^[A-Z][A-Za-z .'-]{1,40}:\s+",
-                "Interview transcript - timestamps": r"^\[\d{1,2}:\d{2}(?::\d{2})?\]\s+",
-                "Interview transcript - speakers + timestamps": (
-                    r"^[A-Z][A-Za-z .'-]{1,40}\s+\(\d{1,2}:\d{2}(?::\d{2})?\):\s+"
-                ),
-            }
-
-            preset_name = st.selectbox(
-                "Interview transcript presets",
-                options=[""] + list(presets.keys()),
-                help="Select a preset and click Apply to populate the regex patterns box.",
-            )
-            if preset_name and st.button("Apply preset"):
-                st.session_state["segmentation_regex_patterns"] = presets[preset_name]
-                st.rerun()
 
             with st.expander("LLM Regex Helper", expanded=False):
                 sample_heading = st.text_input(
@@ -1258,12 +1309,6 @@ def main() -> None:
         st.session_state["selected_row_id"] = unquote_plus(str(qp_entry))
         st.session_state["show_entry_detail"] = True
         st.session_state["step"] = STEP_RESULTS
-
-    nav_step = st.query_params.get("nav")
-    if nav_step:
-        st.query_params.pop("nav", None)
-        if nav_step in {info.key for info in _step_order()}:
-            _set_step(str(nav_step))
 
     _render_stepper()
 
