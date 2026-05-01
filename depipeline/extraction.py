@@ -33,6 +33,7 @@ def extract_text(path: PathLike) -> str:
 
     Supported:
     - .txt
+    - .md / .markdown
     - .docx
     - .pdf (text-based; scanned PDFs are detected and rejected)
 
@@ -55,7 +56,11 @@ def extract_text_with_diagnostics(path: PathLike) -> ExtractionDiagnostics:
 
     suffix = file_path.suffix.lower()
     if suffix == ".txt":
-        text = _extract_txt(file_path)
+        text = _extract_text_file(file_path)
+        return ExtractionDiagnostics(text=text, warnings=[], is_scanned_pdf=False)
+
+    if suffix in {".md", ".markdown"}:
+        text = _extract_markdown(file_path)
         return ExtractionDiagnostics(text=text, warnings=[], is_scanned_pdf=False)
 
     if suffix == ".docx":
@@ -68,7 +73,7 @@ def extract_text_with_diagnostics(path: PathLike) -> ExtractionDiagnostics:
     raise UnsupportedFileTypeError(f"Unsupported file type: {suffix} ({file_path.name})")
 
 
-def _extract_txt(path: Path) -> str:
+def _extract_text_file(path: Path) -> str:
     encodings_to_try = ["utf-8", "utf-8-sig", "cp1252", "latin-1"]
     last_error: Exception | None = None
 
@@ -84,6 +89,32 @@ def _extract_txt(path: Path) -> str:
             return normalize_text(f.read())
     except Exception as exc:
         raise ExtractionError(f"Failed reading text file: {path}") from (last_error or exc)
+
+
+def _strip_yaml_front_matter(text: str) -> str:
+    # Common in Markdown: a leading YAML block between --- and ---
+    # Remove it to reduce noise for segmentation/LLM extraction.
+    stripped = text.lstrip("\ufeff")
+    if not stripped.startswith("---"):
+        return text
+
+    lines = stripped.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+
+    # Find the closing delimiter.
+    for idx in range(1, min(len(lines), 2000)):
+        if lines[idx].strip() == "---":
+            remaining = "\n".join(lines[idx + 1 :])
+            return remaining
+
+    return text
+
+
+def _extract_markdown(path: Path) -> str:
+    text = _extract_text_file(path)
+    text = _strip_yaml_front_matter(text)
+    return normalize_text(text)
 
 
 def _extract_docx(path: Path) -> str:

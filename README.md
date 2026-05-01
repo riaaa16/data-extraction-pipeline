@@ -1,17 +1,17 @@
 # Data Extraction Pipeline
 
-AI-powered pipeline for converting unstructured UX research text (PDF/TXT/DOCX) into structured, queryable rows.
+AI-powered pipeline for converting unstructured UX research text (PDF/TXT/MD/DOCX) into structured, queryable rows.
 
 ## What It Does
 
-1. Reads `.txt`, `.docx`, and text-based `.pdf` files.
+1. Reads `.txt`, `.md`/`.markdown`, `.docx`, and text-based `.pdf` files.
 2. Segments raw text into discrete entries using deterministic heuristics, user-defined regex patterns, or an LLM.
 3. Uses a local LLM (via [Ollama](https://ollama.com)) to map each entry to a user-defined JSON schema.
 4. Validates extracted rows, retries invalid outputs with repair instructions, and attaches per-row confidence scores.
 5. Surfaces keyword frequency, theme aggregation, and field-breakdown charts in an Insights screen.
 
 ```
-PDF / TXT / DOCX
+PDF / TXT / MD / DOCX
   → Text Extraction
   → Entry Segmentation  (deterministic / regex / LLM)
   → LLM Structured Extraction
@@ -97,7 +97,7 @@ The app is a five-step wizard. Use the sidebar or the top stepper to navigate be
 
 ### Step 1 — Upload
 
-Drag and drop one or more `.txt`, `.pdf`, or `.docx` files. Multiple files are processed in order and their entries are merged into a single dataset. Remove individual files with the ✕ button before proceeding.
+Drag and drop one or more `.txt`, `.md`/`.markdown`, `.pdf`, or `.docx` files. Multiple files are processed in order and their entries are merged into a single dataset. Remove individual files with the ✕ button before proceeding.
 
 ### Step 2 — Schema
 

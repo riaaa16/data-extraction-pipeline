@@ -350,6 +350,8 @@ def _coerce_entry_starts(payload: Any, *, n_lines: int) -> List[int]:
 
     starts: List[int] = []
     for val in raw:
+        if isinstance(val, dict):
+            val = val.get("start_line")
         if isinstance(val, float) and val == int(val):
             val = int(val)
         if isinstance(val, int) and 1 <= val <= n_lines:

@@ -57,9 +57,25 @@ class ExtractionTests(unittest.TestCase):
         self.assertFalse(diagnostics.is_scanned_pdf)
         self.assertEqual([], diagnostics.warnings)
 
-    def test_unsupported_extension_still_raises(self) -> None:
+    def test_markdown_file_is_extracted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             file_path = Path(tmp_dir) / "notes.md"
+            file_path.write_text(
+                "---\n" "title: Notes\n" "---\n\n" "# Header\n\n" "- export CSV fails\n",
+                encoding="utf-8",
+            )
+
+            diagnostics = extract_text_with_diagnostics(file_path)
+
+            self.assertIn("Header", diagnostics.text)
+            self.assertIn("export CSV fails", diagnostics.text)
+            self.assertNotIn("title: Notes", diagnostics.text)
+            self.assertFalse(diagnostics.is_scanned_pdf)
+            self.assertEqual([], diagnostics.warnings)
+
+    def test_unsupported_extension_still_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            file_path = Path(tmp_dir) / "notes.rtf"
             file_path.write_text("hello", encoding="utf-8")
 
             with self.assertRaises(UnsupportedFileTypeError):

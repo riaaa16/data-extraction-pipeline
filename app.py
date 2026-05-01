@@ -28,7 +28,7 @@ from depipeline.segmentation import (
 )
 from depipeline.structured_extraction import extract_structured_batch_with_validation
 
-SUPPORTED_UPLOAD_TYPES = ["txt", "pdf", "docx"]
+SUPPORTED_UPLOAD_TYPES = ["txt", "md", "markdown", "pdf", "docx"]
 STEP_UPLOAD = "upload"
 STEP_SCHEMA = "schema"
 STEP_PROCESSING = "processing"
@@ -428,7 +428,7 @@ def _upload_screen() -> None:
                 st.session_state["uploaded_files"].pop(idx)
                 st.rerun()
     else:
-        st.info("Upload at least one .txt, .docx, or .pdf file to continue.")
+        st.info("Upload at least one .txt, .md, .docx, or .pdf file to continue.")
 
     _, btn_col = st.columns([6, 2])
     if btn_col.button(
@@ -988,6 +988,8 @@ def _insights_screen() -> None:
             "Field breakdowns (if any) are still shown below."
         )
 
+    _count_axis = alt.Axis(tickMinStep=1, format="d")
+
     with st.container(border=True):
         st.markdown("**Themes**")
         if insights.themes:
@@ -998,8 +1000,13 @@ def _insights_screen() -> None:
                 alt.Chart(alt.Data(values=theme_data))
                 .mark_bar()
                 .encode(
-                    x=alt.X("count:Q", title="Count"),
+                    x=alt.X("count:Q", title="Count", axis=_count_axis),
                     y=alt.Y("theme:N", sort="-x", title="Theme"),
+                    color=alt.Color(
+                        "theme:N",
+                        scale=alt.Scale(scheme="tableau10"),
+                        legend=None,
+                    ),
                     tooltip=["theme:N", "count:Q"],
                 )
             )
@@ -1018,8 +1025,13 @@ def _insights_screen() -> None:
                 alt.Chart(alt.Data(values=keyword_data))
                 .mark_bar()
                 .encode(
-                    x=alt.X("count:Q", title="Count"),
+                    x=alt.X("count:Q", title="Count", axis=_count_axis),
                     y=alt.Y("keyword:N", sort="-x", title="Keyword"),
+                    color=alt.Color(
+                        "keyword:N",
+                        scale=alt.Scale(scheme="tableau10"),
+                        legend=None,
+                    ),
                     tooltip=["keyword:N", "count:Q"],
                 )
             )
@@ -1040,8 +1052,13 @@ def _insights_screen() -> None:
                     alt.Chart(alt.Data(values=breakdown_data))
                     .mark_bar()
                     .encode(
-                        x=alt.X("count:Q", title="Count"),
+                        x=alt.X("count:Q", title="Count", axis=_count_axis),
                         y=alt.Y("value:N", sort="-x", title="Value"),
+                        color=alt.Color(
+                            "value:N",
+                            scale=alt.Scale(scheme="tableau10"),
+                            legend=None,
+                        ),
                         tooltip=["value:N", "count:Q"],
                     )
                 )

@@ -5,7 +5,7 @@ Deliver the core guided workflow UI: Upload -> Schema -> Processing -> Results, 
 
 ## Scope
 - Streamlit app with the core screens defined in the UI spec
-- File upload (PDF/TXT/DOCX) and file list
+- File upload (PDF/TXT/MD/DOCX) and file list
 - Schema builder for field definition
 - Run pipeline (extraction -> segmentation -> LLM -> validation)
 - Results table + CSV export
@@ -64,7 +64,7 @@ Deliver the core guided workflow UI: Upload -> Schema -> Processing -> Results, 
 
 ## Acceptance Criteria
 - A user can complete the exact workflow:
-  - Upload PDF/TXT/DOCX -> Continue -> Define schema -> Run Processing -> View Results -> Export CSV
+   - Upload PDF/TXT/MD/DOCX -> Continue -> Define schema -> Run Processing -> View Results -> Export CSV
 - The exported CSV includes all rows and the expected columns.
 - Entry Detail edits are reflected in the Results table and CSV.
 - The UI does not introduce screens/components outside the UI spec.

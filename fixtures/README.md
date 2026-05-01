@@ -2,7 +2,7 @@
 
 This folder holds small sample inputs used for smoke-testing the pipeline.
 
-The pipeline accepts `.txt`, `.docx`, and `.pdf` inputs.
+The pipeline accepts `.txt`, `.md`/`.markdown`, `.docx`, and `.pdf` inputs.
 
 ## Layout
 
