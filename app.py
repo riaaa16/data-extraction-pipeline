@@ -61,6 +61,7 @@ def _init_state() -> None:
         "run_report": None,
         "pipeline_error": "",
         "processing_done": False,
+        "processing_active": False,
         "selected_row_id": "",
         "show_entry_detail": False,
         "processing_metrics": {
@@ -73,7 +74,8 @@ def _init_state() -> None:
         "ollama_model": DEFAULT_OLLAMA_MODEL,
         "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
         "ollama_timeout_minutes": 3,
-        "segmentation_mode": "Deterministic",
+        "segmentation_mode": "LLM",
+        "segmentation_mode_user_set": False,
         "dataset_description": "",
         "segmentation_regex_patterns": "",
         "segmentation_regex_pending": "",
@@ -119,6 +121,10 @@ def _schema_form_with_fresh_ids(form_fields: List[Dict[str, str]]) -> List[Dict[
     return out
 
 
+def _mark_segmentation_mode_set() -> None:
+    st.session_state["segmentation_mode_user_set"] = True
+
+
 @dataclass(frozen=True)
 class _StepInfo:
     key: str
@@ -128,8 +134,8 @@ class _StepInfo:
 def _step_order() -> List[_StepInfo]:
     return [
         _StepInfo(STEP_UPLOAD, "Upload"),
-        _StepInfo(STEP_SCHEMA, "Schema"),
-        _StepInfo(STEP_PROCESSING, "Process"),
+        _StepInfo(STEP_SCHEMA, "Fields"),
+        _StepInfo(STEP_PROCESSING, "Run"),
         _StepInfo(STEP_RESULTS, "Results"),
         _StepInfo(STEP_INSIGHTS, "Insights"),
     ]
@@ -251,22 +257,32 @@ def _render_sidebar() -> None:
                 st.rerun()
 
         st.markdown("---")
-        with st.expander("Ollama", expanded=False):
-            st.text_input("Model", key="ollama_model")
-            st.text_input("Base URL", key="ollama_base_url")
+        settings_disabled = bool(
+            st.session_state.get("processing_active")
+            or (
+                st.session_state.get("step") == STEP_PROCESSING
+                and not st.session_state.get("processing_done")
+            )
+        )
+        with st.expander("Model Settings", expanded=False):
+            st.caption("Defaults work for most users.")
+            st.text_input("Model", key="ollama_model", disabled=settings_disabled)
+            st.text_input("Base URL", key="ollama_base_url", disabled=settings_disabled)
             st.number_input(
                 "Timeout (minutes)",
                 min_value=1,
                 max_value=30,
                 key="ollama_timeout_minutes",
+                disabled=settings_disabled,
             )
             st.number_input(
                 "Validation retries",
                 min_value=0,
                 max_value=10,
                 key="validation_max_retries",
+                disabled=settings_disabled,
             )
-            if st.button("Test connection"):
+            if st.button("Test connection", disabled=settings_disabled):
                 timeout_minutes = float(st.session_state.get("ollama_timeout_minutes", 3))
                 timeout_seconds = max(5, int(timeout_minutes * 60))
                 ok, message = _test_ollama_connection(
@@ -390,7 +406,7 @@ def _sanitize_schema_name(name: str) -> str:
 
 def _upload_screen() -> None:
     st.subheader("Upload Files")
-    st.caption("Add the documents you want to extract from.")
+    st.caption("Add the documents you want to process.")
 
     uploads = st.file_uploader(
         "Drag & drop files here",
@@ -432,7 +448,7 @@ def _upload_screen() -> None:
 
     _, btn_col = st.columns([6, 2])
     if btn_col.button(
-        "Continue → Schema",
+        "Continue → Fields",
         disabled=not st.session_state["uploaded_files"],
         type="primary",
         width="stretch",
@@ -442,8 +458,8 @@ def _upload_screen() -> None:
 
 
 def _schema_screen() -> None:
-    st.subheader("Schema Builder")
-    st.caption("Define the fields you want to extract from each entry.")
+    st.subheader("Output Fields")
+    st.caption("Choose the columns you want to see in your results.")
 
     # Keep defaults visible even if prior session state accidentally persisted empty strings.
     if not st.session_state.get("ollama_model"):
@@ -454,7 +470,10 @@ def _schema_screen() -> None:
         st.session_state["ollama_timeout_minutes"] = 3
 
     if st.session_state.get("segmentation_mode") not in {"Deterministic", "Regex", "LLM"}:
-        st.session_state["segmentation_mode"] = "Deterministic"
+        st.session_state["segmentation_mode"] = "LLM"
+
+    if not st.session_state.get("segmentation_mode_user_set"):
+        st.session_state["segmentation_mode"] = "LLM"
 
     pending_regex = str(st.session_state.get("segmentation_regex_pending", "")).strip()
     if pending_regex:
@@ -663,29 +682,31 @@ def _schema_screen() -> None:
                     st.session_state["schema_manage_action"] = ""
                     st.rerun()
 
-    with st.expander("Entry Separation", expanded=True):
+    with st.expander("Advanced: Entry Separation", expanded=False):
+        st.caption("Optional: adjust how entries are split. Defaults work for most files.")
         st.radio(
             "Mode",
             options=["Deterministic", "Regex", "LLM"],
             horizontal=True,
             key="segmentation_mode",
+            on_change=_mark_segmentation_mode_set,
         )
 
         mode = str(st.session_state.get("segmentation_mode"))
         if mode == "Deterministic":
-            st.info("Entries will be split using built-in heuristics. No configuration needed.")
+            st.info("Automatic splitting is enabled. No configuration needed.")
         elif mode == "Regex":
             st.text_area(
                 "Boundary patterns (one per line)",
                 key="segmentation_regex_patterns",
                 height=100,
-                help="Each regex marks the START of a new entry. Uses Python regex with multiline mode.",
+                help="Each pattern marks the start of a new entry.",
             )
 
-            with st.expander("LLM Regex Helper", expanded=False):
+            with st.expander("Pattern helper", expanded=False):
                 sample_heading = st.text_input(
                     "Sample heading",
-                    help="Paste one example heading line; we'll suggest a regex for it.",
+                    help="Paste one example heading line; we'll suggest a pattern.",
                 )
                 helper_actions = st.columns([1, 5], vertical_alignment="bottom")
                 if helper_actions[0].button("Suggest regex"):
@@ -724,8 +745,8 @@ def _schema_screen() -> None:
                 ),
             )
             st.info(
-                "The LLM will identify entry boundaries and return start/end line ranges. "
-                "Errors will halt processing with an actionable message."
+                "We'll infer entry boundaries from your description. "
+                "If we cannot, processing will stop with a clear error message."
             )
 
     cols = st.columns([6, 2], vertical_alignment="bottom")
@@ -734,7 +755,7 @@ def _schema_screen() -> None:
         st.rerun()
 
     run_align = cols[1].columns([1, 1], vertical_alignment="bottom")
-    if run_align[1].button("Run Processing →", type="primary"):
+    if run_align[1].button("Start Processing →", type="primary"):
         if not st.session_state.get("uploaded_files"):
             st.error("No uploaded files found. Please return to Upload and add files.")
             return
@@ -748,6 +769,7 @@ def _schema_screen() -> None:
         st.session_state["schema_field_objects"] = parsed_fields
         st.session_state["schema_ready"] = True
         st.session_state["processing_done"] = False
+        st.session_state["processing_active"] = True
         st.session_state["pipeline_error"] = ""
         st.session_state["insights"] = None
         _set_step(STEP_PROCESSING)
@@ -769,10 +791,11 @@ def _persist_uploads() -> List[Path]:
 
 
 def _processing_screen() -> None:
-    st.subheader("Processing")
-    st.caption("Running your pipeline. This may take a few minutes.")
+    st.subheader("Processing Files")
+    st.caption("Processing your files. You will see results when it's done.")
 
     if st.session_state.get("processing_done"):
+        st.session_state["processing_active"] = False
         if st.session_state.get("pipeline_error"):
             st.error(st.session_state["pipeline_error"])
 
@@ -795,21 +818,22 @@ def _processing_screen() -> None:
                     st.session_state["run_report"] = {}
                     st.rerun()
         else:
-            st.success("Processing complete.")
+            st.success("Ready. Your results are available.")
             report = st.session_state.get("run_report") or {}
-            metric_cols = st.columns(4)
-            metric_cols[0].metric("Total entries", report.get("total_entries", 0))
-            metric_cols[1].metric("First-pass valid", report.get("valid_first_pass", 0))
-            metric_cols[2].metric("Retried", report.get("retried", 0))
-            metric_cols[3].metric("Failed", report.get("failed", 0))
+            with st.expander("Run summary", expanded=False):
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("Total entries", report.get("total_entries", 0))
+                metric_cols[1].metric("First-pass valid", report.get("valid_first_pass", 0))
+                metric_cols[2].metric("Retried", report.get("retried", 0))
+                metric_cols[3].metric("Failed", report.get("failed", 0))
 
         cols = st.columns([6, 2], vertical_alignment="bottom")
-        if cols[0].button("← Back to Schema"):
+        if cols[0].button("← Back to Fields"):
             _set_step(STEP_SCHEMA)
             st.rerun()
 
         if cols[1].button(
-            "Continue → Results",
+            "View Results →",
             disabled=bool(st.session_state.get("pipeline_error")),
             type="primary",
             width="stretch",
@@ -818,17 +842,24 @@ def _processing_screen() -> None:
             st.rerun()
         return
 
-    st.markdown("**Stage Progress**")
+    st.session_state["processing_active"] = True
+    overall_bar = st.progress(0)
+    status = st.empty()
+    status.write("Processing files...")
 
-    st.markdown("**1 — Text Extraction**")
-    extraction_bar = st.progress(0)
-    st.markdown("**2 — Segmentation**")
-    segmentation_bar = st.progress(0)
-    st.markdown("**3 — LLM Extraction**")
-    llm_bar = st.progress(0)
-    st.markdown("**4 — Validation**")
-    validation_bar = st.progress(0)
-    metrics = st.empty()
+    with st.expander("Processing details", expanded=False):
+        st.markdown("**1 — Read files**")
+        extraction_bar = st.progress(0)
+        st.markdown("**2 — Split entries**")
+        segmentation_bar = st.progress(0)
+        st.markdown("**3 — Extract fields**")
+        llm_bar = st.progress(0)
+        st.markdown("**4 — Final checks**")
+        validation_bar = st.progress(0)
+        metrics = st.empty()
+
+    def _set_overall(pct: int) -> None:
+        overall_bar.progress(min(100, max(0, int(pct))))
 
     try:
         schema_fields: List[SchemaField] = st.session_state.get("schema_field_objects") or _build_schema_fields(
@@ -856,6 +887,7 @@ def _processing_screen() -> None:
                 warnings.append(f"{path.name}: {warning}")
 
             extraction_bar.progress(int((idx / total_files) * 100))
+            _set_overall(int((idx / total_files) * 20))
 
             mode = str(st.session_state.get("segmentation_mode", "Deterministic"))
             if mode in {"LLM", "LLM (boundaries)"}:
@@ -881,6 +913,7 @@ def _processing_screen() -> None:
                 entries = segment_entries(diagnostics.text)
 
             segmentation_bar.progress(int((idx / total_files) * 100))
+            _set_overall(20 + int((idx / total_files) * 20))
 
             for entry in entries:
                 entry["id"] = f"{path.stem}-{path.suffix.lstrip('.')}-{entry['id']}"
@@ -891,6 +924,8 @@ def _processing_screen() -> None:
             )
 
         llm_bar.progress(0)
+        _set_overall(40)
+        status.write("Extracting fields...")
 
         def _on_llm_progress(
             progress_index: int,
@@ -905,10 +940,11 @@ def _processing_screen() -> None:
             within = (int(attempt) + 1) / denom
             pct = int(((base + within) / total) * 100)
             llm_bar.progress(min(99, max(0, pct)))
+            _set_overall(40 + int(((base + within) / total) * 50))
 
             metrics.write(
                 f"Files: {total_files}/{total_files} | Entries: {len(all_entries)} | "
-                f"LLM: {progress_index}/{progress_total}"
+                f"Extracted: {progress_index}/{progress_total}"
             )
 
         rows, report = extract_structured_batch_with_validation(
@@ -923,6 +959,8 @@ def _processing_screen() -> None:
 
         llm_bar.progress(100)
         validation_bar.progress(100)
+        _set_overall(100)
+        status.write("Finalizing results...")
         metrics.write(
             f"Files: {total_files}/{total_files} | Entries: {len(all_entries)} | Processed: {len(rows)}"
         )
@@ -941,6 +979,7 @@ def _processing_screen() -> None:
     except DepipelineError as exc:
         st.session_state["pipeline_error"] = str(exc)
     finally:
+        st.session_state["processing_active"] = False
         st.session_state["processing_done"] = True
         st.rerun()
 
@@ -1071,8 +1110,6 @@ def _insights_screen() -> None:
 
 
 def _results_screen() -> None:
-    st.subheader("Results")
-
     rows: List[Dict[str, Any]] = st.session_state.get("rows", [])
     schema_fields: List[SchemaField] = st.session_state.get("schema_field_objects", [])
 
@@ -1083,19 +1120,27 @@ def _results_screen() -> None:
             st.rerun()
         return
 
-    # Summary metric cards
-    report = st.session_state.get("run_report") or {}
-    failed_count = int(report.get("failed", 0))
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("Total entries", report.get("total_entries", 0))
-    metric_cols[1].metric("First-pass valid", report.get("valid_first_pass", 0))
-    metric_cols[2].metric("Retried", report.get("retried", 0))
-    metric_cols[3].metric(
-        "Failed",
-        failed_count,
-        delta=f"{failed_count} failed" if failed_count else None,
-        delta_color="inverse",
-    )
+    header_cols = st.columns([6, 2], vertical_alignment="bottom")
+    with header_cols[0]:
+        st.subheader("Results")
+        st.caption("Review and export your results.")
+    with header_cols[1]:
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDownloadButton"] > button {height: 72px;}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        csv_bytes = _rows_to_csv_bytes(rows, schema_fields)
+        st.download_button(
+            "📥 Export CSV",
+            data=csv_bytes,
+            file_name="depipeline_results.csv",
+            mime="text/csv",
+            width="stretch",
+        )
 
     # Warnings — collapsed expander
     warnings = st.session_state.get("processing_warnings", [])
@@ -1110,8 +1155,8 @@ def _results_screen() -> None:
     field_hint = ", ".join(searchable_fields[:6]) + (" …" if len(searchable_fields) > 6 else "")
 
     filter_text = st.text_input(
-        "Filter results",
-        placeholder="🔍 Filter by ID, field values, or raw text…",
+        "Search results",
+        placeholder="🔍 Search by ID, field values, or raw text…",
         key="results_filter",
         help=f"Searches across all rows for matches in: {field_hint}",
         label_visibility="collapsed",
@@ -1133,14 +1178,12 @@ def _results_screen() -> None:
     if filter_text.strip():
         match_word = "match" if len(preview_rows) == 1 else "matches"
         st.caption(
-            f"**{len(preview_rows)} {match_word}** across all {len(rows)} rows · "
-            "select a row then click **Open Entry Detail** to inspect."
+            f"**{len(preview_rows)} {match_word}** across all {len(rows)} rows."
         )
     else:
         st.caption(
             f"Showing {min(len(preview_rows), int(st.session_state['sample_preview_count']))} "
-            f"of {len(rows)} rows · "
-            "select a row then click **Open Entry Detail** to inspect."
+            f"of {len(rows)} rows."
         )
 
     table_selection_id = ""
@@ -1158,16 +1201,6 @@ def _results_screen() -> None:
     except TypeError:
         st.dataframe(preview_rows, width="stretch")
 
-    dl_col, _ = st.columns([2, 6])
-    csv_bytes = _rows_to_csv_bytes(rows, schema_fields)
-    dl_col.download_button(
-        "📥 Export CSV",
-        data=csv_bytes,
-        file_name="depipeline_results.csv",
-        mime="text/csv",
-        width="stretch",
-    )
-
     row_ids = [str(row.get("id", "")) for row in rows]
     selected_default = st.session_state.get("selected_row_id", "")
     selected_index = row_ids.index(selected_default) if selected_default in row_ids else 0
@@ -1181,7 +1214,7 @@ def _results_screen() -> None:
 
     effective_selected = table_selection_id or selected
 
-    if entry_row[1].button("Open Entry Detail →", width="stretch"):
+    if entry_row[1].button("View Entry Detail →", width="stretch"):
         st.session_state["selected_row_id"] = effective_selected
         st.session_state["show_entry_detail"] = True
         st.rerun()
@@ -1191,7 +1224,7 @@ def _results_screen() -> None:
         _set_step(STEP_PROCESSING)
         st.rerun()
 
-    if controls[1].button("Continue → Insights", type="primary", width="stretch"):
+    if controls[1].button("View Insights →", width="stretch"):
         st.session_state["selected_row_id"] = effective_selected
         _set_step(STEP_INSIGHTS)
         st.rerun()
